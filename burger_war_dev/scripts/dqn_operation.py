@@ -208,7 +208,7 @@ class DQNBot:
         }
 
         # get action from agent
-        action = self.agent.get_action()
+        action = self.agent.get_action(self.state)
         action = int(action.item())
 
         # update twist
