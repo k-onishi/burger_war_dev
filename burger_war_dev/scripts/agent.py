@@ -16,7 +16,7 @@ class Agent:
             capacity (int): capacity of memory
             gamma (int): discount rate
         """
-        self.brain = Brain(width, height, num_actions, batch_size, capacity, gamma)  # エージェントが行動を決定するための頭脳を生成
+        self.brain = Brain(num_actions, batch_size, capacity, gamma)  # エージェントが行動を決定するための頭脳を生成
 
     def update_policy_network(self):
         """
@@ -26,15 +26,16 @@ class Agent:
         """
         self.brain.replay()
 
-    def get_action(self, state, step):
+    def get_action(self, state, episode):
         """
         get action
         Args:
-            state (dict): state including lidar, image and 2d-map
+            state (State): state including lidar, map and image
+            episode (int): episode
         Return:
             action (Tensor): action (number)
         """
-        action = self.brain.decide_action(state, step)
+        action = self.brain.decide_action(state, episode)
         return action
 
     def memorize(self, state, action, state_next, reward):

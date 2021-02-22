@@ -2,6 +2,7 @@
 #-*- coding: utf-8 -*-
 
 import random
+from state import State
 from transition import Transition
 class ReplayMemory:
 

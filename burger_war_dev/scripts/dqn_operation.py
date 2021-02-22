@@ -6,13 +6,17 @@ import sys
 import time
 import subprocess
 import json
+import requests
 
 import rospy
 import rosparam
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Pose, Point, Quaternion, Twist, PoseWithCovarianceStamped
 from sensor_msgs.msg import Image, LaserScan
-from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+from std_srvs.srv import Empty
+from gazebo_msgs.msg import ModelState
+from gazebo_msgs.srv import SetModelState
+from tf import transformations as tft
 
 import cv2
 import torch
@@ -20,19 +24,10 @@ import torchvision
 import numpy as np
 from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
+from state import State
 
-# parameters
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# config
 FIELD_SCALE = 2.4
-VEL = 0.4
-OMEGA = 1
-ACTION_LIST = [
-    [0, 0],
-    [VEL, 0],
-    [-VEL, 0],
-    [0, OMEGA],
-    [0, -OMEGA],
-]
 FIELD_MARKERS = {
     "Tomato_N": [(1, 8), (1, 9), (2, 8), (2, 9)],
     "Tomato_S": [(3, 6), (3, 7), (4, 6), (4, 7)],
@@ -49,11 +44,22 @@ FIELD_MARKERS = {
 }
 ROBOT_MARKERS = ["BL_B", "BL_L", "BL_R", "RE_B", "RE_L", "RE_R"]
 
+JUDGE_URL = ""
+
+
 # functions
 def get_rotation_matrix(rad, color='r'):
     if color == 'b' : rad += np.pi
     rot = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
     return rot
+
+
+def send_to_judge(url, data):
+    res = requests.post(url,
+                        json.dumps(data),
+                        headers={'Content-Type': 'application/json'}
+                        )
+    return res
 
 
 # main class
@@ -75,15 +81,18 @@ class DQNBot:
         self.robot = robot
         self.my_markers = ROBOT_MARKERS[:3] if robot == "b" else ROBOT_MARKERS[3:]
         self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+        self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
 
         # state variables
         self.lidar_ranges = None
         self.my_pose = None
         self.image = None
         self.state = None
-        self.reward = None
+        self.past_state = None
+        self.action = None
 
         # other variables
+        self.game_state = "stop"
         self.step = 0
         self.episode = 0
         self.bridge = CvBridge()
@@ -91,10 +100,15 @@ class DQNBot:
         # rostopic subscription
         self.lidar_sub = rospy.Subscriber('scan', LaserScan, self.callback_lidar)
         self.image_sub = rospy.Subscriber('image_raw', Image, self.callback_image)
-        self.odom_sub = rospy.Subscriber('odom', Odometry, self.callback_odom)
+        self.amcl_sub = rospy.Subscriber("amcl_pose", PoseWithCovarianceStamped, self.callback_amcl)
 
         # rostopic publication
         self.twist_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
+
+        # rostopic service
+        self.state_service = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
+        self.pause_service = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
+        self.unpause_service = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
     
     def callback_lidar(self, data):
         """
@@ -120,16 +134,16 @@ class DQNBot:
         except CvBridgeError as e:
             rospy.logerr(e)
         
-    def callback_odom(self, data):
+    def callback_amcl(self, data):
         """
         callback function of odom subscription
 
         Args:
-            data (Odometry): robot pose
+            data (PoseWithCovarianceStamped): robot pose
         """
         x = data.pose.pose.position.x
         y = data.pose.pose.position.y
-        self.my_pose = np.array([x, y])
+        self.my_pose = np.array([-y, x])
 
     def callback_warstate(self, data):
         """
@@ -141,9 +155,9 @@ class DQNBot:
             https://github.com/p-robotics-hub/burger_war_kit/blob/main/judge/README.md
         """
         json_dict = json.loads(data.data)
-        game_state = json_dict['state']
+        self.game_state = json_dict['state']
         
-        if game_state == "running":            
+        if self.game_state == "running":            
             for tg in json_dict["targets"]:
                 if tg["player"] == self.robot:
                     self.score[tg["name"]] = int(tg["point"])
@@ -195,38 +209,92 @@ class DQNBot:
 
     def strategy(self):
 
-        if self.step != 0:
-            pass
+        # past state
+        self.past_state = self.state
 
+        # get 2d state map
         map = self.get_map()
 
         # current state
-        self.state = {
-            "lidar": self.lidar_ranges,     # (1, 360)
-            "map": map,                     # (1, 2, 16, 16)
-            "image": self.image             # (1, 3, 480, 640)
-        }
+        self.state = State(
+            self.lidar_ranges,     # (1, 360)
+            map,                   # (1, 2, 16, 16)
+            self.image             # (1, 3, 480, 640)
+        )
+
+        if self.step != 0:
+            reward = self.get_reward(self.past_score, self.score)
+            reward = torch.FloatTensor(reward).unsqueeze(0)
+            self.agent.memorize(self.past_state, self.action, self.state, reward)
+
 
         # get action from agent
-        action = self.agent.get_action(self.state)
-        action = int(action.item())
+        self.action = self.agent.get_action(self.state, self.episode)
+        choice = int(self.action.item())
 
         # update twist
         twist = Twist()
-        twist.linear.x = ACTION_LIST[action][0]
+        twist.linear.x = ACTION_LIST[choice][0]
         twist.linear.y = 0.0
         twist.linear.z = 0.0
         twist.angular.x = 0.0
         twist.angular.y = 0.0
-        twist.angular.z = ACTION_LIST[action][1]
+        twist.angular.z = ACTION_LIST[choice][1]
         self.twist_pub.publish(twist)
 
+        self.past_score = self.score
+
+        self.step += 1
+
+    def move_robot(self, model_name, position=None, orientation=None):
+        state = ModelState()
+        state.model_name = model_name
+        pose = Pose()
+        if position is not None:
+            pose.position = Point(*position)
+        if orientation is not None:
+            tmpq = tft.quaternion_from_euler(*orientation)
+            pose.orientation = Quaternion(tmpq[0], tmpq[1], tmpq[2], tmpq[3])
+        state.pose = pose
+        try:
+            self.state_service(state)
+        except rospy.ServiceException, e:
+            print("Service call failed: %s".format(e))
 
     def stop(self):
-
+        self.pause_service()
 
     def restart(self):
+        self.episode += 1
 
+        # restart judge server
+        res = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
+
+        # restart gazebo physics
+        self.unpause_service()
+
+    def reset(self):
+        # reset parameters
+        self.step = 0
+        self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+        self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+        self.lidar_ranges = None
+        self.my_pose = None
+        self.image = None
+        self.state = None
+        self.past_state = None
+        self.action = None
+
+        # reset judge server
+        resp = requests.get(JUDGE_URL + "/reset")
+
+        # reset robot's positions
+        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0.0, 0))
+        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0.0, 0))
+
+    def train(self, n_epochs=20):
+        for _ in range(n_epochs):
+            pass
     
     def run(self, rospy_rate=1):
 
@@ -237,10 +305,45 @@ class DQNBot:
             while not all([v is not None for v in [self.lidar_ranges, self.my_pose, self.image]]):
                 pass
 
+            if self.game_state == "stop":
+                
+                # stop the game
+                self.stop()
+
+                # train agent
+                self.train(n_epochs=20)
+
+                # update target q function
+                if self.episode % UPDATE_Q_FREQ == 0:
+                    pass
+
+                # reset the game
+                self.reset()
+
+                # restart the game
+                self.restart()
+
+            else:
+                self.strategy()
+
             r.sleep()
 
     
 if __name__ == "__main__":
+    rospy.init_node('dqn_run')
+    JUDGE_URL = rospy.get_param('/send_id_to_judge/judge_url')
+
+    # parameters
+    VEL = 0.4
+    OMEGA = 1
+    ACTION_LIST = [
+        [0, 0],
+        [VEL, 0],
+        [-VEL, 0],
+        [0, OMEGA],
+        [0, -OMEGA],
+    ]
+    UPDATE_Q_FREQ = 5
 
     try:
         bot = DQNBot()

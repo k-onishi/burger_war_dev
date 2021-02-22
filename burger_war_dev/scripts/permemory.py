@@ -3,6 +3,7 @@
 
 from sumtree import SumTree
 import random
+from state import State
 from transition import Transition
 import numpy as np
 
