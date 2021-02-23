@@ -62,13 +62,13 @@ class Brain:
 
         # ミニバッチの作成-----------------
 
-        # transitionsは1stepごとの(state, action, state_next, reward)が、self.batch_size分格納されている
-        # つまり、(state, action, state_next, reward)×self.batch_size
+        # transitionsは1stepごとの(state, action, next_state, reward)が、self.batch_size分格納されている
+        # つまり、(state, action, next_state, reward)×self.batch_size
         # これをミニバッチにしたい。つまり
-        # (state×self.batch_size, action×BATCH_SIZE, state_next×BATCH_SIZE, reward×BATCH_SIZE)にする
+        # (state×self.batch_size, action×BATCH_SIZE, next_state, reward×BATCH_SIZE)にする
         batch = Transition(*zip(*transitions))
         batch_state = State(*zip(*batch.state))
-        batch_state_next = State(*zip(*batch.state_next))
+        batch_next_state = State(*zip(*batch.next_state))
 
         # cartpoleがdoneになっておらず、next_stateがあるかをチェックするマスクを作成
         non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
@@ -82,9 +82,9 @@ class Brain:
         image_batch = Variable(torch.cat(batch_state.image))
         action_batch = Variable(torch.cat(batch.action))
         reward_batch = Variable(torch.cat(batch.reward))
-        non_final_next_lidars = Variable(torch.cat([s for s in batch_state_next.lidar if s is not None]))
-        non_final_next_maps = Variable(torch.cat([s for s in batch_state_next.map if s is not None]))
-        non_final_next_images = Variable(torch.cat([s for s in batch_state_next.image if s is not None]))
+        non_final_next_lidars = Variable(torch.cat([s for s in batch_next_state.lidar if s is not None]))
+        non_final_next_maps = Variable(torch.cat([s for s in batch_next_state.map if s is not None]))
+        non_final_next_images = Variable(torch.cat([s for s in batch_next_state.image if s is not None]))
 
         # Set device type; GPU or CPU
         lidar_batch = lidar_batch.to(self.device)

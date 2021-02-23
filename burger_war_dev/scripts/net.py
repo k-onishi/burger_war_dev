@@ -25,13 +25,13 @@ class Net(nn.Module):
         # Core network
         self.block_lidar = nn.Sequential(
             # Input size: (1, 1, 360)
-            nn.Conv1d(1, 16, 3, padding=1, padding_mode='circular'),
+            nn.Conv1d(1, 16, 3, padding=2, padding_mode='circular'),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2),
-            nn.Conv1d(16, 64, 3, padding=1, padding_mode='circular'),
+            nn.Conv1d(16, 64, 3, padding=2, padding_mode='circular'),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=2),
-            nn.Conv1d(64, 128, 3, padding=1, padding_mode='circular'),
+            nn.Conv1d(64, 128, 3, padding=2, padding_mode='circular'),
             nn.ReLU(inplace=True),
             nn.MaxPool1d(kernel_size=3),
             nn.AvgPool1d(kernel_size=30)  # Global Average Pooling
@@ -126,13 +126,13 @@ if __name__ == '__main__':
     net = Net(5)
 
     # Summarize
-    from torchinfo import summary
+    #from torchinfo import summary
     data_sizes = [
         (1, 1, 360),
         (1, 2, 16, 16),
         (1, 3, 480, 640)
     ]
-    summary(net, data_sizes)
+    #summary(net, data_sizes)
     
     # Test run
     example(net, 'cpu')
