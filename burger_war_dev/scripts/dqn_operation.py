@@ -24,6 +24,7 @@ import torchvision
 import numpy as np
 from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
+from state import State
 
 # config
 FIELD_SCALE = 2.4
@@ -215,20 +216,20 @@ class DQNBot:
         map = self.get_map()
 
         # current state
-        self.state = {
-            "lidar": self.lidar_ranges,     # (1, 360)
-            "map": map,                     # (1, 2, 16, 16)
-            "image": self.image             # (1, 3, 480, 640)
-        }
+        self.state = State(
+            self.lidar_ranges,     # (1, 360)
+            map,                   # (1, 2, 16, 16)
+            self.image             # (1, 3, 480, 640)
+        )
 
         if self.step != 0:
             reward = self.get_reward(self.past_score, self.score)
             reward = torch.FloatTensor(reward).unsqueeze(0)
-            # push (s, s', a, r) = (self.past_state, self.state, self.action, reward) to memory
+            self.agent.memorize(self.past_state, self.action, self.state, reward)
 
 
         # get action from agent
-        self.action = self.agent.get_action()
+        self.action = self.agent.get_action(self.state, self.episode)
         choice = int(self.action.item())
 
         # update twist
