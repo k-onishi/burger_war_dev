@@ -24,7 +24,10 @@ import torchvision
 import numpy as np
 from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
+
 from state import State
+from agent import Agent
+
 
 # config
 FIELD_SCALE = 2.4
@@ -68,7 +71,7 @@ class DQNBot:
     An operator to train the dqn agent.
 
     Attributes:
-        lidar_ranges (tensor, (1, 360)): lidar distance data every 1 deg for 0-360 deg
+        lidar_ranges (tensor, (1, 1, 360)): lidar distance data every 1 deg for 0-360 deg
         my_pose (array-like, (2, )): my robot's pose (x, y)
         image (tensor, (1, 3, 480, 640)): camera image
     """
@@ -92,7 +95,7 @@ class DQNBot:
         self.action = None
 
         # other variables
-        self.game_state = "stop"
+        self.game_state = "end"
         self.step = 0
         self.episode = 0
         self.bridge = CvBridge()
@@ -101,14 +104,19 @@ class DQNBot:
         self.lidar_sub = rospy.Subscriber('scan', LaserScan, self.callback_lidar)
         self.image_sub = rospy.Subscriber('image_raw', Image, self.callback_image)
         self.amcl_sub = rospy.Subscriber("amcl_pose", PoseWithCovarianceStamped, self.callback_amcl)
+        self.state_sub = rospy.Timer(rospy.Duration(0.5), self.callback_warstate)
 
         # rostopic publication
         self.twist_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
+        self.amcl_init_pub = rospy.Publisher('initialpose', PoseWithCovarianceStamped, queue_size=1)
 
         # rostopic service
         self.state_service = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         self.pause_service = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.unpause_service = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
+
+        # agent
+        self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA)
     
     def callback_lidar(self, data):
         """
@@ -117,7 +125,7 @@ class DQNBot:
         Args:
             data (LaserScan): distance data of lidar
         """
-        self.lidar_ranges = torch.FloatTensor(data.ranges).unsqueeze(0)
+        self.lidar_ranges = torch.FloatTensor(data.ranges).view(1, 1, -1)   # (1, 1, 360)
 
     def callback_image(self, data):
         """
@@ -130,7 +138,7 @@ class DQNBot:
             img = self.bridge.imgmsg_to_cv2(data, "bgr8")
             img = IMG.fromarray(img)
             img = torchvision.transforms.ToTensor()(img)
-            self.image = img.unsqueeze(0)
+            self.image = img.unsqueeze(0)                   # (1, 3, 480, 640)
         except CvBridgeError as e:
             rospy.logerr(e)
         
@@ -145,16 +153,16 @@ class DQNBot:
         y = data.pose.pose.position.y
         self.my_pose = np.array([-y, x])
 
-    def callback_warstate(self, data):
+    def callback_warstate(self, event):
         """
         callback function of warstate subscription
 
-        Args:
-            data (String): json data of game state
         Notes:
             https://github.com/p-robotics-hub/burger_war_kit/blob/main/judge/README.md
         """
-        json_dict = json.loads(data.data)
+        # get the game state from judge server by HTTP request
+        resp = requests.get(JUDGE_URL + "/warState")
+        json_dict = json.loads(resp.text)
         self.game_state = json_dict['state']
         
         if self.game_state == "running":            
@@ -217,16 +225,15 @@ class DQNBot:
 
         # current state
         self.state = State(
-            self.lidar_ranges,     # (1, 360)
+            self.lidar_ranges,     # (1, 1, 360)
             map,                   # (1, 2, 16, 16)
             self.image             # (1, 3, 480, 640)
         )
 
         if self.step != 0:
             reward = self.get_reward(self.past_score, self.score)
-            reward = torch.FloatTensor(reward).unsqueeze(0)
+            reward = torch.LongTensor([reward])
             self.agent.memorize(self.past_state, self.action, self.state, reward)
-
 
         # get action from agent
         self.action = self.agent.get_action(self.state, self.episode)
@@ -261,6 +268,14 @@ class DQNBot:
         except rospy.ServiceException, e:
             print("Service call failed: %s".format(e))
 
+    def init_amcl_pose(self):
+        amcl_pose = PoseWithCovarianceStamped()
+        amcl_pose.header.stamp = rospy.Time.now()
+        amcl_pose.header.frame_id = "map"
+        amcl_pose.pose.pose.position.x = -1.3
+        amcl_pose.pose.pose.position.y = 0.0
+        self.amcl_init_pub.publish(amcl_pose)
+
     def stop(self):
         self.pause_service()
 
@@ -292,10 +307,19 @@ class DQNBot:
         self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0.0, 0))
         self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0.0, 0))
 
+        # reset amcl pose
+        self.init_amcl_pose()
+
     def train(self, n_epochs=20):
         for _ in range(n_epochs):
-            pass
+            self.agent.update_policy_network()
     
+    def save_model(self, path):
+        self.agent.save(path)
+
+    def load_model(self, path):
+        self.agent.load(path)
+
     def run(self, rospy_rate=1):
 
         r = rospy.Rate(rospy_rate)
@@ -315,10 +339,12 @@ class DQNBot:
 
                 # update target q function
                 if self.episode % UPDATE_Q_FREQ == 0:
-                    pass
+                    self.agent.update_target_network()
 
                 # reset the game
                 self.reset()
+
+                r.sleep(1)
 
                 # restart the game
                 self.restart()
@@ -330,8 +356,14 @@ class DQNBot:
 
     
 if __name__ == "__main__":
+
     rospy.init_node('dqn_run')
     JUDGE_URL = rospy.get_param('/send_id_to_judge/judge_url')
+
+    try:
+        ROBOT_NAME = rosparam.get_param('DQNRun/side')
+    except:
+        ROBOT_NAME = rosparam.get_param('enemyRun/side')
 
     # parameters
     VEL = 0.4
@@ -344,10 +376,14 @@ if __name__ == "__main__":
         [0, -OMEGA],
     ]
     UPDATE_Q_FREQ = 5
+    BATCH_SIZE = 32
+    MEM_CAPACITY = 2000
+    GAMMA = 0.99
+    RATE = 1
 
     try:
-        bot = DQNBot()
-        bot.run(1)
+        bot = DQNBot(robot=ROBOT_NAME)
+        bot.run(rospy_rate=RATE)
 
     except rospy.ROSInterruptException:
         pass
