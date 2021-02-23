@@ -46,6 +46,8 @@ ROBOT_MARKERS = ["BL_B", "BL_L", "BL_R", "RE_B", "RE_L", "RE_R"]
 
 JUDGE_URL = ""
 
+DIST_TO_WALL_TH = 0.3  #[m]
+NUM_LASER_CLOSE_TO_WALL_TH = 90
 
 # functions
 def get_rotation_matrix(rad, color='r'):
@@ -109,6 +111,9 @@ class DQNBot:
         self.state_service = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
         self.pause_service = rospy.ServiceProxy('/gazebo/pause_physics', Empty)
         self.unpause_service = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
+
+        # mode
+        self.punish_if_facing_wall = False
     
     def callback_lidar(self, data):
         """
@@ -178,10 +183,25 @@ class DQNBot:
         diff_my_score = {k: current[k] - past[k] for k in self.score.keys() if k not in self.my_markers}
         diff_op_score = {k: current[k] - past[k] for k in self.my_markers}
 
+        # Check LiDAR data to punish for AMCL failure
+        bad_position = 0
+        if self.punish_if_facing_wall and (self.lidar_ranges is not None):
+            lidar_1d = self.lidar_ranges.squeeze()
+            count_too_close = 0
+            
+            # Check each laser and count up if too close
+            for intensity in lidar_1d:
+                if intensity.item() < DIST_TO_WALL_TH:
+                    count_too_close += 1
+
+            # Punish if too many lasers close to obstacle
+            if count_too_close > NUM_LASER_CLOSE_TO_WALL_TH:
+                bad_position = -1
+
         plus_diff = sum([v for v in diff_my_score.values() if v > 0])
         minus_diff = sum([v for v in diff_op_score.values() if v < 0])
 
-        return plus_diff + minus_diff
+        return plus_diff + minus_diff + bad_position
 
     def get_map(self):
         
@@ -217,7 +237,7 @@ class DQNBot:
 
         # current state
         self.state = State(
-            self.lidar_ranges,     # (1, 360)
+            self.lidar_ranges,     # (1, 1, 360)
             map,                   # (1, 2, 16, 16)
             self.image             # (1, 3, 480, 640)
         )
