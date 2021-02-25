@@ -49,8 +49,6 @@ ROBOT_MARKERS = ["BL_B", "BL_L", "BL_R", "RE_B", "RE_L", "RE_R"]
 
 JUDGE_URL = ""
 
-DIST_TO_WALL_TH = 0.3  #[m]
-NUM_LASER_CLOSE_TO_WALL_TH = 90
 
 # functions
 def get_rotation_matrix(rad, color='r'):
@@ -77,12 +75,13 @@ class DQNBot:
         my_pose (array-like, (2, )): my robot's pose (x, y)
         image (tensor, (1, 3, 480, 640)): camera image
     """
-    def __init__(self, robot="r"):
+    def __init__(self, robot="r", online=False):
         """
         Args:
             robot ([type]): [description]
         """
-        # robot attributes
+        # attributes
+        self.online = online
         self.robot = robot
         self.my_markers = ROBOT_MARKERS[:3] if robot == "b" else ROBOT_MARKERS[3:]
         self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
@@ -110,7 +109,6 @@ class DQNBot:
 
         # rostopic publication
         self.twist_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
-        self.amcl_init_pub = rospy.Publisher('initialpose', PoseWithCovarianceStamped, queue_size=1)
 
         # rostopic service
         self.state_service = rospy.ServiceProxy('/gazebo/set_model_state', SetModelState)
@@ -119,6 +117,7 @@ class DQNBot:
 
         # agent
         self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA)
+
         # mode
         self.punish_if_facing_wall = False
     
@@ -130,6 +129,7 @@ class DQNBot:
             data (LaserScan): distance data of lidar
         """
         self.lidar_ranges = torch.FloatTensor(data.ranges).view(1, 1, -1)   # (1, 1, 360)
+        self.lidar_ranges = torch.clamp(self.lidar_ranges, min=0, max=3)
 
     def callback_image(self, data):
         """
@@ -148,7 +148,7 @@ class DQNBot:
         
     def callback_amcl(self, data):
         """
-        callback function of odom subscription
+        callback function of amcl subscription
 
         Args:
             data (PoseWithCovarianceStamped): robot pose
@@ -258,6 +258,8 @@ class DQNBot:
         self.action = self.agent.get_action(self.state, self.episode)
         choice = int(self.action.item())
 
+        print("step: {}, action:{}".format(self.step, choice))
+
         # update twist
         twist = Twist()
         twist.linear.x = ACTION_LIST[choice][0]
@@ -288,12 +290,18 @@ class DQNBot:
             print("Service call failed: %s".format(e))
 
     def init_amcl_pose(self):
+        amcl_init_pub = rospy.Publisher('initialpose', PoseWithCovarianceStamped, queue_size=1)
         amcl_pose = PoseWithCovarianceStamped()
         amcl_pose.header.stamp = rospy.Time.now()
         amcl_pose.header.frame_id = "map"
         amcl_pose.pose.pose.position.x = -1.3
         amcl_pose.pose.pose.position.y = 0.0
-        self.amcl_init_pub.publish(amcl_pose)
+        amcl_pose.pose.pose.position.z = 0.0
+        amcl_pose.pose.pose.orientation.x = 0.0
+        amcl_pose.pose.pose.orientation.y = 0.0
+        amcl_pose.pose.pose.orientation.z = 0.0
+        amcl_pose.pose.pose.orientation.w = 1.0
+        amcl_init_pub.publish(amcl_pose)
 
     def stop(self):
         self.pause_service()
@@ -302,10 +310,15 @@ class DQNBot:
         self.episode += 1
 
         # restart judge server
-        res = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
+        resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
 
         # restart gazebo physics
         self.unpause_service()
+
+        # reset amcl pose
+        self.init_amcl_pose()
+
+        print("restart the game")
 
     def reset(self):
         # reset parameters
@@ -320,17 +333,15 @@ class DQNBot:
         self.action = None
 
         # reset judge server
-        resp = requests.get(JUDGE_URL + "/reset")
+        subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
 
         # reset robot's positions
-        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0.0, 0))
-        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0.0, 0))
-
-        # reset amcl pose
-        self.init_amcl_pose()
+        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57))
+        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57))
 
     def train(self, n_epochs=20):
-        for _ in range(n_epochs):
+        for epoch in range(n_epochs):
+            print("episode {}: epoch {}".format(self.episode, epoch))
             self.agent.update_policy_network()
     
     def save_model(self, path):
@@ -353,8 +364,9 @@ class DQNBot:
                 # stop the game
                 self.stop()
 
-                # train agent
-                self.train(n_epochs=20)
+                # offline learning
+                if not self.online:
+                    self.train(n_epochs=20)
 
                 # update target q function
                 if self.episode % UPDATE_Q_FREQ == 0:
@@ -363,13 +375,18 @@ class DQNBot:
                 # reset the game
                 self.reset()
 
-                r.sleep(1)
+                time.sleep(1)
 
                 # restart the game
                 self.restart()
 
-            else:
+            elif self.game_state == "running":
+                # take an action
                 self.strategy()
+
+                # online learning
+                if self.online:
+                    self.agent.update_policy_network()
 
             r.sleep()
 
@@ -385,6 +402,12 @@ if __name__ == "__main__":
         ROBOT_NAME = rosparam.get_param('enemyRun/side')
 
     # parameters
+
+    # wall avoidance
+    DIST_TO_WALL_TH = 0.3  #[m]
+    NUM_LASER_CLOSE_TO_WALL_TH = 90
+
+    # action lists
     VEL = 0.4
     OMEGA = 1
     ACTION_LIST = [
@@ -394,10 +417,14 @@ if __name__ == "__main__":
         [0, OMEGA],
         [0, -OMEGA],
     ]
+
+    # agent config
     UPDATE_Q_FREQ = 5
     BATCH_SIZE = 32
     MEM_CAPACITY = 2000
     GAMMA = 0.99
+
+    # time freq [Hz]
     RATE = 1
 
     try:

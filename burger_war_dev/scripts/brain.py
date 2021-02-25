@@ -71,7 +71,7 @@ class Brain:
         batch_next_state = State(*zip(*batch.next_state))
 
         # cartpoleがdoneになっておらず、next_stateがあるかをチェックするマスクを作成
-        non_final_mask = torch.ByteTensor(tuple(map(lambda s: s is not None, batch.next_state)))
+        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=torch.bool)
 
         # バッチから状態、行動、報酬を格納（non_finalはdoneになっていないstate）
         # catはConcatenates（結合）のことです。
@@ -94,6 +94,7 @@ class Brain:
         non_final_next_lidars = non_final_next_lidars.to(self.device)
         non_final_next_maps = non_final_next_maps.to(self.device)
         non_final_next_images = non_final_next_images.to(self.device)
+        non_final_mask = non_final_mask.to(self.device)
 
         # ミニバッチの作成終了------------------
 
@@ -158,6 +159,7 @@ class Brain:
 
             # Infer
             output = self.policy_net(input_lidar, input_map, input_image)
+            print(output)
             action = output.data.max(1)[1].view(1, 1)
 
         else:
