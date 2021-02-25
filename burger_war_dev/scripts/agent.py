@@ -26,7 +26,7 @@ class Agent:
         """
         self.brain.replay()
 
-    def get_action(self, state, episode):
+    def get_action(self, state, episode, policy_mode):
         """
         get action
         Args:
@@ -35,7 +35,7 @@ class Agent:
         Return:
             action (Tensor): action (number)
         """
-        action = self.brain.decide_action(state, episode)
+        action = self.brain.decide_action(state, episode, policy_mode)
         return action
 
     def memorize(self, state, action, state_next, reward):

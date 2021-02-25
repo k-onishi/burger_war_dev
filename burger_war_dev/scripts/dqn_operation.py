@@ -75,17 +75,23 @@ class DQNBot:
         my_pose (array-like, (2, )): my robot's pose (x, y)
         image (tensor, (1, 3, 480, 640)): camera image
     """
-    def __init__(self, robot="r", online=False):
+    def __init__(self, robot="r", online=False, policy_mode="epsilon", save_path=None):
         """
         Args:
             robot ([type]): [description]
         """
         # attributes
-        self.online = online
         self.robot = robot
+        self.online = online
+        self.policy_mode = policy_mode
         self.my_markers = ROBOT_MARKERS[:3] if robot == "b" else ROBOT_MARKERS[3:]
         self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
         self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+
+        if save_path is None:
+            self.save_path = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/tmp.pth"
+        else:
+            self.save_path = save_path
 
         # state variables
         self.lidar_ranges = None
@@ -119,7 +125,7 @@ class DQNBot:
         self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA)
 
         # mode
-        self.punish_if_facing_wall = False
+        self.punish_if_facing_wall = True
     
     def callback_lidar(self, data):
         """
@@ -128,8 +134,9 @@ class DQNBot:
         Args:
             data (LaserScan): distance data of lidar
         """
-        self.lidar_ranges = torch.FloatTensor(data.ranges).view(1, 1, -1)   # (1, 1, 360)
-        self.lidar_ranges = torch.clamp(self.lidar_ranges, min=0, max=3)
+        raw_lidar = data.ranges
+        raw_lidar = [0.0 if l > 3.5 else l for l in raw_lidar]
+        self.lidar_ranges = torch.FloatTensor(raw_lidar).view(1, 1, -1)   # (1, 1, 360)
 
     def callback_image(self, data):
         """
@@ -203,6 +210,7 @@ class DQNBot:
 
             # Punish if too many lasers close to obstacle
             if count_too_close > NUM_LASER_CLOSE_TO_WALL_TH:
+                print("### Too close to the wall, get penalty ###")
                 bad_position = -1
 
         plus_diff = sum([v for v in diff_my_score.values() if v > 0])
@@ -255,10 +263,10 @@ class DQNBot:
             self.agent.memorize(self.past_state, self.action, self.state, reward)
 
         # get action from agent
-        self.action = self.agent.get_action(self.state, self.episode)
+        self.action = self.agent.get_action(self.state, self.episode, self.policy_mode)
         choice = int(self.action.item())
 
-        print("step: {}, action:{}".format(self.step, choice))
+        print("step: {}, vel:{}, omega:{}".format(self.step, ACTION_LIST[choice][0], ACTION_LIST[choice][1]))
 
         # update twist
         twist = Twist()
@@ -372,6 +380,9 @@ class DQNBot:
                 if self.episode % UPDATE_Q_FREQ == 0:
                     self.agent.update_target_network()
 
+                # save model
+                self.save_model(self.save_path)
+
                 # reset the game
                 self.reset()
 
@@ -403,6 +414,10 @@ if __name__ == "__main__":
 
     # parameters
 
+    ONLINE = False
+    POLICY = "epsilon"
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/test.pth" 
+
     # wall avoidance
     DIST_TO_WALL_TH = 0.3  #[m]
     NUM_LASER_CLOSE_TO_WALL_TH = 90
@@ -428,7 +443,7 @@ if __name__ == "__main__":
     RATE = 1
 
     try:
-        bot = DQNBot(robot=ROBOT_NAME)
+        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, save_path=SAVE_PATH)
         bot.run(rospy_rate=RATE)
 
     except rospy.ROSInterruptException:

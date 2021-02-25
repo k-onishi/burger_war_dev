@@ -145,11 +145,48 @@ class Brain:
                 self.memory.update(indexes[i], td_err)
 
 
-    def decide_action(self, state, episode):
-        # ε-greedy法で徐々に最適行動のみを採用する
-        epsilon = 0.5 * (1 / (episode + 1))
+    def decide_action(self, state, episode, policy_mode="epsilon"):
+        """
+        policy
 
-        if epsilon <= np.random.uniform(0, 1):
+        Args:
+            state (State): state object
+            episode (int): current episode
+            policy_mode (str): exploration methods
+                - epsilon: deterministic policy with eps-greedy
+                - boltzmann: stochastic policy by softmax
+        """
+
+        if policy_mode == "epsilon":
+            # ε-greedy法で徐々に最適行動のみを採用する
+            # epsilon = 0.5 * (1 / (episode + 1))
+            if episode < 50:
+                epsilon = 0.25
+            elif episode < 100:
+                epsilon = 0.15
+            else:
+                epsilon = 0.05
+
+            if epsilon <= np.random.uniform(0, 1):
+                self.policy_net.eval()  # ネットワークを推論モードに切り替える
+
+                # Set device type; GPU or CPU
+                input_lidar = Variable(state.lidar).to(self.device)
+                input_map = Variable(state.map).to(self.device)
+                input_image = Variable(state.image).to(self.device)
+
+                # Infer
+                output = self.policy_net(input_lidar, input_map, input_image)
+                action = output.data.max(1)[1].view(1, 1)
+
+                print("Q-values: {}, Action: {}".format(output[0], action.item()))
+            else:
+                # Generate random value [0.0, 1.0)
+                action = torch.LongTensor([[random.randrange(self.num_actions)]])
+                action = action.to(self.device)
+                print("Random action: {}".format(action.item()))
+
+        elif policy_mode == "boltzmann":
             self.policy_net.eval()  # ネットワークを推論モードに切り替える
 
             # Set device type; GPU or CPU
@@ -159,11 +196,13 @@ class Brain:
 
             # Infer
             output = self.policy_net(input_lidar, input_map, input_image)
-            print(output)
-            action = output.data.max(1)[1].view(1, 1)
+            prob = F.softmax(output, dim=1)
+
+            action = torch.multinomial(prob, 1)
+            print("Prob: {}, Action: {}".format(prob[0], action.item()))
 
         else:
-            # Generate random value [0.0, 1.0)
+            print("Error: policy_mode is 'epsilon' or 'boltzmann'")
             action = torch.LongTensor([[random.randrange(self.num_actions)]])
             action = action.to(self.device)
 
