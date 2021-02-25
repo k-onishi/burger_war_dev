@@ -135,7 +135,7 @@ class DQNBot:
             data (LaserScan): distance data of lidar
         """
         raw_lidar = data.ranges
-        raw_lidar = [0.0 if l > 3.5 else l for l in raw_lidar]
+        raw_lidar = [0.12 if l > 3.5 else l for l in raw_lidar]
         self.lidar_ranges = torch.FloatTensor(raw_lidar).view(1, 1, -1)   # (1, 1, 360)
 
     def callback_image(self, data):
