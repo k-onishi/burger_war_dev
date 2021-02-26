@@ -280,27 +280,50 @@ class DQNBot:
             self.image             # (1, 3, 480, 640)
         )
 
-        if self.step != 0:
-            current_score = copy.deepcopy(self.score)
-            reward = self.get_reward(self.past_score, current_score)
-            self.past_score = current_score
-            reward = torch.LongTensor([reward])
-            self.agent.memorize(self.past_state, self.action, self.state, reward)
+        # check how stacked for each direction
+        front_stacked = torch.sum(self.state.lidar[0][0][:45] < DIST_TO_WALL_TH) \
+                + torch.sum(self.state.lidar[0][0][315:] < DIST_TO_WALL_TH)
+        left_stacked = torch.sum(self.state.lidar[0][0][45:135] < DIST_TO_WALL_TH)
+        rear_stacked = torch.sum(self.state.lidar[0][0][135:225] < DIST_TO_WALL_TH)
+        right_stacked = torch.sum(self.state.lidar[0][0][:315] < DIST_TO_WALL_TH)
+        # if total of stacked is larger than threshold, recover stacked status
+        if front_stacked + left_stacked + rear_stacked + right_stacked > NUM_LASER_CLOSE_TO_WALL_TH:
+            print("### stacked ###")
+            SPEED = 0.4
+            RAD = 3.14
+            # decide where to go for recovering stacked status
+            _, linear_x, angular_z = min([
+                (front_stacked, SPEED, .0),
+                (left_stacked, .0, RAD / 2), 
+                (rear_stacked, -SPEED, .0),
+                (right_stacked, .0, -RAD / 2),
+            ], key=lambda e: e[0])
+            self.action = None
+        else:
+            if self.action is not None:
+                current_score = copy.deepcopy(self.score)
+                reward = self.get_reward(self.past_score, current_score)
+                self.past_score = current_score
+                reward = torch.LongTensor([reward])
+                self.agent.memorize(self.past_state, self.action, self.state, reward)
 
-        # get action from agent
-        self.action = self.agent.get_action(self.state, self.episode, self.policy_mode, self.debug)
-        choice = int(self.action.item())
+            # get action from agent
+            self.action = self.agent.get_action(self.state, self.episode, self.policy_mode, self.debug)
+            choice = int(self.action.item())
 
-        print("step: {}, vel:{}, omega:{}".format(self.step, ACTION_LIST[choice][0], ACTION_LIST[choice][1]))
+            linear_x = ACTION_LIST[choice][0]
+            angular_z = ACTION_LIST[choice][1]
+
+        print("step: {}, vel:{}, omega:{}".format(self.step, linear_x, angular_z))
 
         # update twist
         twist = Twist()
-        twist.linear.x = ACTION_LIST[choice][0]
+        twist.linear.x = linear_x
         twist.linear.y = 0.0
         twist.linear.z = 0.0
         twist.angular.x = 0.0
         twist.angular.y = 0.0
-        twist.angular.z = ACTION_LIST[choice][1]
+        twist.angular.z = angular_z
         self.twist_pub.publish(twist)
 
         self.step += 1
@@ -412,7 +435,6 @@ class DQNBot:
                 self.restart()
 
             elif self.game_state == "running":
-                # take an action
                 self.strategy()
 
                 # online learning
@@ -457,8 +479,8 @@ if __name__ == "__main__":
 
     # agent config
     UPDATE_Q_FREQ = 5
-    BATCH_SIZE = 32
-    MEM_CAPACITY = 2000
+    BATCH_SIZE = 8
+    MEM_CAPACITY = 200
     GAMMA = 0.99
     PRIOTIZED = True
     LR = 0.0005
