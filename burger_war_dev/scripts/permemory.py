@@ -32,6 +32,8 @@ class PERMemory:
     def sample(self, batch_size):
         data_list = []
         indexes = []
+        print("total: {}".format(self.tree.total()))
+        print("batch_size: {}".format(batch_size))
         for rand in np.random.uniform(0, self.tree.total(), batch_size):
             (idx, _, data) = self.tree.get(rand)
             data_list.append(data)
