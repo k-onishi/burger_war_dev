@@ -77,7 +77,7 @@ class DQNBot:
         my_pose (array-like, (2, )): my robot's pose (x, y)
         image (tensor, (1, 3, 480, 640)): camera image
     """
-    def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True, save_path=None, load_path=None):
+    def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True, save_path=None, load_path=None, manual_avoid=False):
         """
         Args:
             robot ([type]): [description]
@@ -137,7 +137,7 @@ class DQNBot:
             self.agent.load(load_path)
 
         # mode
-        self.punish_if_facing_wall = True
+        self.punish_if_facing_wall = not manual_avoid
     
     def callback_lidar(self, data):
         """
@@ -280,33 +280,23 @@ class DQNBot:
             self.image             # (1, 3, 480, 640)
         )
 
-        # check how stacked for each direction
-        front_stacked = torch.sum(self.state.lidar[0][0][:45] < DIST_TO_WALL_TH) \
-                + torch.sum(self.state.lidar[0][0][315:] < DIST_TO_WALL_TH)
-        left_stacked = torch.sum(self.state.lidar[0][0][45:135] < DIST_TO_WALL_TH)
-        rear_stacked = torch.sum(self.state.lidar[0][0][135:225] < DIST_TO_WALL_TH)
-        right_stacked = torch.sum(self.state.lidar[0][0][:315] < DIST_TO_WALL_TH)
-        # if total of stacked is larger than threshold, recover stacked status
-        if front_stacked + left_stacked + rear_stacked + right_stacked > NUM_LASER_CLOSE_TO_WALL_TH:
-            print("### stacked ###")
-            SPEED = 0.4
-            RAD = 3.14
-            # decide where to go for recovering stacked status
-            _, linear_x, angular_z = min([
-                (front_stacked, SPEED, .0),
-                (left_stacked, .0, RAD / 2), 
-                (rear_stacked, -SPEED, .0),
-                (right_stacked, .0, -RAD / 2),
-            ], key=lambda e: e[0])
+        if self.action is not None:
+            current_score = copy.deepcopy(self.score)
+            reward = self.get_reward(self.past_score, current_score)
+            print("reward: {}".format(reward))
+            self.past_score = current_score
+            reward = torch.LongTensor([reward])
+            self.agent.memorize(self.past_state, self.action, self.state, reward)
+
+        # manual wall avoidance
+        if not self.punish_if_facing_wall:
+            avoid, linear_x, angular_z = self.avoid_wall()
+        else:
+            avoid = False
+
+        if avoid:
             self.action = None
         else:
-            if self.action is not None:
-                current_score = copy.deepcopy(self.score)
-                reward = self.get_reward(self.past_score, current_score)
-                self.past_score = current_score
-                reward = torch.LongTensor([reward])
-                self.agent.memorize(self.past_state, self.action, self.state, reward)
-
             # get action from agent
             self.action = self.agent.get_action(self.state, self.episode, self.policy_mode, self.debug)
             choice = int(self.action.item())
@@ -327,6 +317,34 @@ class DQNBot:
         self.twist_pub.publish(twist)
 
         self.step += 1
+
+    def avoid_wall(self):
+        # check how stacked for each direction
+        front_stacked = torch.sum(self.state.lidar[0][0][:45] < DIST_TO_WALL_TH) \
+                + torch.sum(self.state.lidar[0][0][315:] < DIST_TO_WALL_TH)
+        left_stacked = torch.sum(self.state.lidar[0][0][45:135] < DIST_TO_WALL_TH)
+        rear_stacked = torch.sum(self.state.lidar[0][0][135:225] < DIST_TO_WALL_TH)
+        right_stacked = torch.sum(self.state.lidar[0][0][:315] < DIST_TO_WALL_TH)
+        # if total of stacked is larger than threshold, recover stacked status
+        if front_stacked + left_stacked + rear_stacked + right_stacked > NUM_LASER_CLOSE_TO_WALL_TH:
+            print("### stacked ###")
+            avoid = True
+            SPEED = 0.4
+            RAD = 3.14
+            # decide where to go for recovering stacked status
+            _, linear_x, angular_z = min([
+                (front_stacked, SPEED, .0),
+                (left_stacked, .0, RAD / 2), 
+                (rear_stacked, -SPEED, .0),
+                (right_stacked, .0, -RAD / 2),
+            ], key=lambda e: e[0])
+            
+        else:
+            avoid = False
+            linear_x = None
+            angular_z = None
+
+        return avoid, linear_x, angular_z
 
     def move_robot(self, model_name, position=None, orientation=None):
         state = ModelState()
@@ -461,9 +479,10 @@ if __name__ == "__main__":
     DEBUG = True
     SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/test.pth" 
     LOAD_PATH = None
+    MANUAL_AVOID = True
 
     # wall avoidance
-    DIST_TO_WALL_TH = 0.3  #[m]
+    DIST_TO_WALL_TH = 0.25  #[m]
     NUM_LASER_CLOSE_TO_WALL_TH = 90
 
     # action lists
@@ -479,8 +498,8 @@ if __name__ == "__main__":
 
     # agent config
     UPDATE_Q_FREQ = 5
-    BATCH_SIZE = 8
-    MEM_CAPACITY = 200
+    BATCH_SIZE = 32
+    MEM_CAPACITY = 2000
     GAMMA = 0.99
     PRIOTIZED = True
     LR = 0.0005
@@ -490,7 +509,7 @@ if __name__ == "__main__":
     RATE = 1
 
     try:
-        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG, save_path=SAVE_PATH, load_path=LOAD_PATH)
+        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG, save_path=SAVE_PATH, load_path=LOAD_PATH, manual_avoid=MANUAL_AVOID)
         bot.run(rospy_rate=RATE)
 
     except rospy.ROSInterruptException:
