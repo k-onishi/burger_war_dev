@@ -7,6 +7,7 @@ import time
 import subprocess
 import json
 import requests
+import copy
 
 import rospy
 import rosparam
@@ -280,7 +281,9 @@ class DQNBot:
         )
 
         if self.step != 0:
-            reward = self.get_reward(self.past_score, self.score)
+            current_score = copy.deepcopy(self.score)
+            reward = self.get_reward(self.past_score, current_score)
+            self.past_score = current_score
             reward = torch.LongTensor([reward])
             self.agent.memorize(self.past_state, self.action, self.state, reward)
 
@@ -299,8 +302,6 @@ class DQNBot:
         twist.angular.y = 0.0
         twist.angular.z = ACTION_LIST[choice][1]
         self.twist_pub.publish(twist)
-
-        self.past_score = self.score
 
         self.step += 1
 
