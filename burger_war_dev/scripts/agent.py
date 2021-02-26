@@ -8,7 +8,7 @@ class Agent:
     """
     An agent for DDQN
     """
-    def __init__(self, num_actions, batch_size = 32, capacity = 10000, gamma = 0.99):
+    def __init__(self, num_actions, batch_size=32, capacity=10000, gamma=0.99, prioritized=True, lr=0.0005):
         """
         Args:
             num_actions (int): number of actions to output
@@ -16,7 +16,7 @@ class Agent:
             capacity (int): capacity of memory
             gamma (int): discount rate
         """
-        self.brain = Brain(num_actions, batch_size, capacity, gamma)  # エージェントが行動を決定するための頭脳を生成
+        self.brain = Brain(num_actions, batch_size, capacity, gamma, prioritized, lr)  # エージェントが行動を決定するための頭脳を生成
 
     def update_policy_network(self):
         """
@@ -26,7 +26,7 @@ class Agent:
         """
         self.brain.replay()
 
-    def get_action(self, state, episode, policy_mode):
+    def get_action(self, state, episode, policy_mode, debug):
         """
         get action
         Args:
@@ -35,7 +35,7 @@ class Agent:
         Return:
             action (Tensor): action (number)
         """
-        action = self.brain.decide_action(state, episode, policy_mode)
+        action = self.brain.decide_action(state, episode, policy_mode, debug)
         return action
 
     def memorize(self, state, action, state_next, reward):

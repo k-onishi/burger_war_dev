@@ -75,7 +75,7 @@ class DQNBot:
         my_pose (array-like, (2, )): my robot's pose (x, y)
         image (tensor, (1, 3, 480, 640)): camera image
     """
-    def __init__(self, robot="r", online=False, policy_mode="epsilon", save_path=None):
+    def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True, save_path=None, load_path=None):
         """
         Args:
             robot ([type]): [description]
@@ -84,6 +84,7 @@ class DQNBot:
         self.robot = robot
         self.online = online
         self.policy_mode = policy_mode
+        self.debug = debug
         self.my_markers = ROBOT_MARKERS[:3] if robot == "b" else ROBOT_MARKERS[3:]
         self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
         self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
@@ -122,7 +123,10 @@ class DQNBot:
         self.unpause_service = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
 
         # agent
-        self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA)
+        self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
+
+        if load_path is not None:
+            self.agent.load(load_path)
 
         # mode
         self.punish_if_facing_wall = True
@@ -263,7 +267,7 @@ class DQNBot:
             self.agent.memorize(self.past_state, self.action, self.state, reward)
 
         # get action from agent
-        self.action = self.agent.get_action(self.state, self.episode, self.policy_mode)
+        self.action = self.agent.get_action(self.state, self.episode, self.policy_mode, self.debug)
         choice = int(self.action.item())
 
         print("step: {}, vel:{}, omega:{}".format(self.step, ACTION_LIST[choice][0], ACTION_LIST[choice][1]))
@@ -352,12 +356,6 @@ class DQNBot:
             print("episode {}: epoch {}".format(self.episode, epoch))
             self.agent.update_policy_network()
     
-    def save_model(self, path):
-        self.agent.save(path)
-
-    def load_model(self, path):
-        self.agent.load(path)
-
     def run(self, rospy_rate=1):
 
         r = rospy.Rate(rospy_rate)
@@ -369,19 +367,22 @@ class DQNBot:
 
             if self.game_state == "stop":
                 
+                if not self.debug:
+                    break
+
                 # stop the game
                 self.stop()
 
                 # offline learning
                 if not self.online:
-                    self.train(n_epochs=20)
+                    self.train(n_epochs=EPOCHS)
 
                 # update target q function
                 if self.episode % UPDATE_Q_FREQ == 0:
                     self.agent.update_target_network()
 
                 # save model
-                self.save_model(self.save_path)
+                self.agent.save(self.save_path)
 
                 # reset the game
                 self.reset()
@@ -396,7 +397,7 @@ class DQNBot:
                 self.strategy()
 
                 # online learning
-                if self.online:
+                if self.online and self.debug:
                     self.agent.update_policy_network()
 
             r.sleep()
@@ -416,7 +417,9 @@ if __name__ == "__main__":
 
     ONLINE = False
     POLICY = "epsilon"
+    DEBUG = True
     SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/test.pth" 
+    LOAD_PATH = None
 
     # wall avoidance
     DIST_TO_WALL_TH = 0.3  #[m]
@@ -438,12 +441,15 @@ if __name__ == "__main__":
     BATCH_SIZE = 32
     MEM_CAPACITY = 2000
     GAMMA = 0.99
-
+    PRIOTIZED = True
+    LR = 0.0005
+    EPOCHS = 20
+    
     # time freq [Hz]
     RATE = 1
 
     try:
-        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, save_path=SAVE_PATH)
+        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG, save_path=SAVE_PATH, load_path=LOAD_PATH)
         bot.run(rospy_rate=RATE)
 
     except rospy.ROSInterruptException:

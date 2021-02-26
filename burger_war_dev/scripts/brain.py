@@ -19,7 +19,7 @@ from net import Net
 
 class Brain:
     TARGET_UPDATE = 10
-    def __init__(self, num_actions, batch_size = 32, capacity = 10000, gamma = 0.99, prioritized = True):
+    def __init__(self, num_actions, batch_size=32, capacity=10000, gamma=0.99, prioritized=True, lr=0.0005):
         self.batch_size = batch_size
         self.gamma = gamma
         self.num_actions = num_actions
@@ -48,7 +48,7 @@ class Brain:
         #print(self.policy_net)  # Print network
 
         # Configure optimizer
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=0.0001)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
 
     def replay(self):
         """Experience Replayでネットワークの重みを学習 """
@@ -145,7 +145,7 @@ class Brain:
                 self.memory.update(indexes[i], td_err)
 
 
-    def decide_action(self, state, episode, policy_mode="epsilon"):
+    def decide_action(self, state, episode, policy_mode="epsilon", debug=True):
         """
         policy
 
@@ -155,7 +155,22 @@ class Brain:
             policy_mode (str): exploration methods
                 - epsilon: deterministic policy with eps-greedy
                 - boltzmann: stochastic policy by softmax
+            debug (bool): whether train or inference
         """
+
+        if not debug:
+            self.policy_net.eval()  # ネットワークを推論モードに切り替える
+
+            # Set device type; GPU or CPU
+            input_lidar = Variable(state.lidar).to(self.device)
+            input_map = Variable(state.map).to(self.device)
+            input_image = Variable(state.image).to(self.device)
+
+            # Infer
+            output = self.policy_net(input_lidar, input_map, input_image)
+            action = output.data.max(1)[1].view(1, 1)
+
+            return action
 
         if policy_mode == "epsilon":
             # ε-greedy法で徐々に最適行動のみを採用する
