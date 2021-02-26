@@ -12,6 +12,7 @@ import rospy
 import rosparam
 from geometry_msgs.msg import Pose, Point, Quaternion, Twist, PoseWithCovarianceStamped
 from sensor_msgs.msg import Image, LaserScan
+from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from std_srvs.srv import Empty
 from gazebo_msgs.msg import ModelState
@@ -82,6 +83,7 @@ class DQNBot:
         """
         # attributes
         self.robot = robot
+        self.enemy = "b" if robot == "r" else "r"
         self.online = online
         self.policy_mode = policy_mode
         self.debug = debug
@@ -111,8 +113,13 @@ class DQNBot:
         # rostopic subscription
         self.lidar_sub = rospy.Subscriber('scan', LaserScan, self.callback_lidar)
         self.image_sub = rospy.Subscriber('image_raw', Image, self.callback_image)
-        self.amcl_sub = rospy.Subscriber("amcl_pose", PoseWithCovarianceStamped, self.callback_amcl)
         self.state_sub = rospy.Timer(rospy.Duration(0.5), self.callback_warstate)
+
+        if self.debug:
+            if self.robot == "r": self.odom_sub = rospy.Subscriber("red_bot/tracker", Odometry, self.callback_odom)
+            if self.robot == "b": self.odom_sub = rospy.Subscriber("enemy_bot/tracker", Odometry, self.callback_odom)
+        else:
+            self.amcl_sub = rospy.Subscriber("amcl_pose", PoseWithCovarianceStamped, self.callback_amcl)
 
         # rostopic publication
         self.twist_pub = rospy.Publisher('cmd_vel', Twist, queue_size=1)
@@ -156,7 +163,18 @@ class DQNBot:
             self.image = img.unsqueeze(0)                   # (1, 3, 480, 640)
         except CvBridgeError as e:
             rospy.logerr(e)
-        
+    
+    def callback_odom(self, data):
+        """
+        callback function of tracker subscription
+
+        Args:
+            data (Odometry): robot pose
+        """
+        x = data.pose.pose.position.x
+        y = data.pose.pose.position.y
+        self.my_pose = np.array([x, y])
+
     def callback_amcl(self, data):
         """
         callback function of amcl subscription
@@ -184,7 +202,7 @@ class DQNBot:
             for tg in json_dict["targets"]:
                 if tg["player"] == self.robot:
                     self.score[tg["name"]] = int(tg["point"])
-                else:
+                elif tg["player"] == self.enemy:
                     self.score[tg["name"]] = -int(tg["point"])
 
     def get_reward(self, past, current):
@@ -444,7 +462,7 @@ if __name__ == "__main__":
     PRIOTIZED = True
     LR = 0.0005
     EPOCHS = 20
-    
+
     # time freq [Hz]
     RATE = 1
 
