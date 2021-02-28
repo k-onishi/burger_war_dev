@@ -13,7 +13,7 @@ from transition import Transition
 from replaymemory import ReplayMemory
 from permemory import PERMemory
 #import torchvision.models as models
-from net import Net
+from net2 import Net
 
 #------------------------------------------------
 
@@ -211,7 +211,7 @@ class Brain:
 
             # Infer
             output = self.policy_net(input_lidar, input_map, input_image)
-            prob = F.softmax(output, dim=1)
+            prob = F.softmax(output - output.mean(), dim=1)
 
             action = torch.multinomial(prob, 1)
             print("Prob: {}, Action: {}".format(prob[0], action.item()))

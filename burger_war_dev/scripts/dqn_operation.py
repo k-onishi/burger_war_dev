@@ -232,9 +232,9 @@ class DQNBot:
                     count_too_close += 1
 
             # Punish if too many lasers close to obstacle
-            if count_too_close > NUM_LASER_CLOSE_TO_WALL_TH:
+            if count_too_close > NUM_LASER_CLOSE_TO_WALL_TH or lidar_1d.min() < 0.15:
                 print("### Too close to the wall, get penalty ###")
-                bad_position = -1
+                bad_position = -0.2
 
         plus_diff = sum([v for v in diff_my_score.values() if v > 0])
         minus_diff = sum([v for v in diff_op_score.values() if v < 0])
@@ -255,13 +255,53 @@ class DQNBot:
         if j > 15: j = 15
         pose_map[i][j] = 1
 
+        if i != 0:
+            pose_map[i - 1][j] = 0.5
+        if i != 15:
+            pose_map[i + 1][j] = 0.5
+        if j != 0:
+            pose_map[i][j - 1] = 0.5
+        if j != 15:
+            pose_map[i][j + 1] = 0.5
+
+        if i != 0 and j != 0:
+            pose_map[i - 1][j - 1] = 0.25
+        if i != 15 and j != 15:
+            pose_map[i + 1][j + 1] = 0.25
+        if i != 0 and j != 15:
+            pose_map[i - 1][j + 1] = 0.25
+        if i != 15 and j != 0:
+            pose_map[i + 1][j - 1] = 0.25
+        
         # score map
         score_map = np.zeros((16, 16))
         for key, pos in FIELD_MARKERS.items():
             for p in pos:
                 score_map[p[0], p[1]] = self.score[key]
 
-        map_array = np.stack([pose_map, score_map])
+        # my marker map
+        marker_map = np.zeros((2, 16, 16))
+        if self.robot == "r":
+            r_ch = 0
+            b_ch = 1
+        else:
+            r_ch = 1
+            b_ch = 0
+
+        if self.score["RE_B"] != 0:
+            marker_map[r_ch, :8, :] = 1
+        if self.score["RE_L"] != 0:
+            marker_map[r_ch, 8:, :8] = 1
+        if self.score["RE_R"] != 0:
+            marker_map[r_ch, 8:, 8:] = 1
+        if self.score["BL_B"] != 0:
+            marker_map[b_ch, :8, :] = 1
+        if self.score["BL_L"] != 0:
+            marker_map[b_ch, 8:, :8] = 1
+        if self.score["BL_R"] != 0:
+            marker_map[b_ch, 8:, 8:] = 1
+
+        map_array = np.stack([pose_map, score_map, marker_map[0], marker_map[1]])
 
         return torch.FloatTensor(map_array).unsqueeze(0)
 
@@ -298,7 +338,12 @@ class DQNBot:
             self.action = None
         else:
             # get action from agent
-            self.action = self.agent.get_action(self.state, self.episode, self.policy_mode, self.debug)
+            if self.step % 3 == 0:
+                policy = "boltzmann"
+            else:
+                policy = "epsilon"
+
+            self.action = self.agent.get_action(self.state, self.episode, policy, self.debug)
             choice = int(self.action.item())
 
             linear_x = ACTION_LIST[choice][0]
@@ -474,22 +519,21 @@ if __name__ == "__main__":
 
     # parameters
 
-    ONLINE = False
+    ONLINE = True
     POLICY = "epsilon"
-    DEBUG = True
-    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/test.pth" 
-    LOAD_PATH = None
-    MANUAL_AVOID = True
+    DEBUG = False
+    SAVE_PATH = None #"../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/model_20210228.pth" 
+    LOAD_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/model_20210227.pth" 
+    MANUAL_AVOID = False
 
     # wall avoidance
-    DIST_TO_WALL_TH = 0.25  #[m]
+    DIST_TO_WALL_TH = 0.18  #[m]
     NUM_LASER_CLOSE_TO_WALL_TH = 90
 
     # action lists
-    VEL = 0.4
-    OMEGA = 1
+    VEL = 0.3
+    OMEGA = 0.8
     ACTION_LIST = [
-        [0, 0],
         [VEL, 0],
         [-VEL, 0],
         [0, OMEGA],
@@ -498,7 +542,7 @@ if __name__ == "__main__":
 
     # agent config
     UPDATE_Q_FREQ = 5
-    BATCH_SIZE = 32
+    BATCH_SIZE = 16
     MEM_CAPACITY = 2000
     GAMMA = 0.99
     PRIOTIZED = True
