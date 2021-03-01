@@ -27,8 +27,8 @@ import numpy as np
 from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
 
-from state import State
-from agent import Agent
+from utils.state import State
+from agents.agent import Agent
 
 
 # config
