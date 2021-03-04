@@ -4,5 +4,5 @@
 from collections import namedtuple
 
 State = namedtuple (
-    'State', ('lidar', 'map', 'image')
+    'State', ('pose', 'lidar', 'image', 'mask')
 )

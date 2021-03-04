@@ -18,7 +18,7 @@ from utils.state import State
 from utils.transition import Transition
 from utils.replaymemory import ReplayMemory
 from utils.permemory import PERMemory
-from networks.net2 import Net
+from networks.maskNet import MaskNet
 
 #------------------------------------------------
 
@@ -39,8 +39,8 @@ class Brain:
             self.memory = ReplayMemory(capacity)
 
         # Build network
-        self.policy_net = Net(self.num_actions)
-        self.target_net = Net(self.num_actions)
+        self.policy_net = MaskNet(self.num_actions)
+        self.target_net = MaskNet(self.num_actions)
         self.target_net.eval()
 
         # Set device type; GPU or CPU (Use GPU if available)
@@ -76,30 +76,25 @@ class Brain:
         batch_next_state = State(*zip(*batch.next_state))
 
         # cartpoleがdoneになっておらず、next_stateがあるかをチェックするマスクを作成
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=torch.bool)
+        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), dtype=torch.bool).to(self.device)
 
         # バッチから状態、行動、報酬を格納（non_finalはdoneになっていないstate）
         # catはConcatenates（結合）のことです。
         # 例えばstateの場合、[torch.FloatTensor of size 1x4]がself.batch_size分並んでいるのですが、
         # それを size self.batch_sizex4 に変換します
-        lidar_batch = Variable(torch.cat(batch_state.lidar))
-        map_batch = Variable(torch.cat(batch_state.map))
-        image_batch = Variable(torch.cat(batch_state.image))
-        action_batch = Variable(torch.cat(batch.action))
-        reward_batch = Variable(torch.cat(batch.reward))
-        non_final_next_lidars = Variable(torch.cat([s for s in batch_next_state.lidar if s is not None]))
-        non_final_next_maps = Variable(torch.cat([s for s in batch_next_state.map if s is not None]))
-        non_final_next_images = Variable(torch.cat([s for s in batch_next_state.image if s is not None]))
+        pose_batch = Variable(torch.cat(batch_state.pose)).to(self.device)
+        lidar_batch = Variable(torch.cat(batch_state.lidar)).to(self.device)
+        image_batch = Variable(torch.cat(batch_state.image)).to(self.device)
+        mask_batch = Variable(torch.cat(batch_state.mask)).to(self.device)
 
-        # Set device type; GPU or CPU
-        lidar_batch = lidar_batch.to(self.device)
-        map_batch = map_batch.to(self.device)
-        image_batch = image_batch.to(self.device)
-        reward_batch = reward_batch.to(self.device)
-        non_final_next_lidars = non_final_next_lidars.to(self.device)
-        non_final_next_maps = non_final_next_maps.to(self.device)
-        non_final_next_images = non_final_next_images.to(self.device)
-        non_final_mask = non_final_mask.to(self.device)
+        action_batch = Variable(torch.cat(batch.action)).to(self.device)
+        reward_batch = Variable(torch.cat(batch.reward)).to(self.device)
+
+        non_final_next_poses = Variable(torch.cat([s for s in batch_next_state.pose if s is not None])).to(self.device)
+        non_final_next_lidars = Variable(torch.cat([s for s in batch_next_state.lidar if s is not None])).to(self.device)
+        non_final_next_images = Variable(torch.cat([s for s in batch_next_state.image if s is not None])).to(self.device)
+        non_final_next_masks = Variable(torch.cat([s for s in batch_next_state.mask if s is not None])).to(self.device)
+
 
         # ミニバッチの作成終了------------------
 
@@ -110,22 +105,21 @@ class Brain:
         # self.policy_net(state_batch)は、[torch.FloatTensor of size self.batch_sizex2]になっており、
         # 実行したアクションに対応する[torch.FloatTensor of size self.batch_sizex1]にするために
         # gatherを使用します。
-        state_action_values = self.policy_net(lidar_batch, map_batch, image_batch).gather(1, action_batch)
+        state_action_values = self.policy_net(pose_batch, lidar_batch, image_batch, mask_batch).gather(1, action_batch)
 
         # max{Q(s_t+1, a)}値を求める。
         # 次の状態がない場合は0にしておく
-        next_state_values = Variable(torch.zeros(
-            self.batch_size).type(torch.FloatTensor))
-        next_state_values = next_state_values.to(self.device)
+        next_state_values = Variable(torch.zeros(self.batch_size).type(torch.FloatTensor)).to(self.device)
 
         # 次の状態がある場合の値を求める
         # 出力であるdataにアクセスし、max(1)で列方向の最大値の[値、index]を求めます
         # そしてその値（index=0）を出力します
         next_state_values[non_final_mask] = self.target_net(
-            non_final_next_lidars,
-            non_final_next_maps,
-            non_final_next_images
-            ).data.max(1)[0].detach()
+                                                non_final_next_poses,
+                                                non_final_next_lidars,
+                                                non_final_next_images,
+                                                non_final_next_masks
+                                            ).data.max(1)[0].detach()
 
         # 教師となるQ(s_t, a_t)値を求める
         expected_state_action_values = reward_batch + self.gamma * next_state_values
@@ -167,12 +161,13 @@ class Brain:
             self.policy_net.eval()  # ネットワークを推論モードに切り替える
 
             # Set device type; GPU or CPU
+            input_pose = Variable(state.pose).to(self.device)
             input_lidar = Variable(state.lidar).to(self.device)
-            input_map = Variable(state.map).to(self.device)
             input_image = Variable(state.image).to(self.device)
+            input_mask = Variable(state.mask).to(self.device)
 
             # Infer
-            output = self.policy_net(input_lidar, input_map, input_image)
+            output = self.policy_net(input_pose, input_lidar, input_image, input_mask)
             action = output.data.max(1)[1].view(1, 1)
 
             return action
@@ -191,12 +186,13 @@ class Brain:
                 self.policy_net.eval()  # ネットワークを推論モードに切り替える
 
                 # Set device type; GPU or CPU
+                input_pose = Variable(state.pose).to(self.device)
                 input_lidar = Variable(state.lidar).to(self.device)
-                input_map = Variable(state.map).to(self.device)
                 input_image = Variable(state.image).to(self.device)
+                input_mask = Variable(state.mask).to(self.device)
 
                 # Infer
-                output = self.policy_net(input_lidar, input_map, input_image)
+                output = self.policy_net(input_pose, input_lidar, input_image, input_mask)
                 action = output.data.max(1)[1].view(1, 1)
 
                 print("Q-values: {}, Action: {}".format(output[0], action.item()))
@@ -210,13 +206,14 @@ class Brain:
             self.policy_net.eval()  # ネットワークを推論モードに切り替える
 
             # Set device type; GPU or CPU
+            input_pose = Variable(state.pose).to(self.device)
             input_lidar = Variable(state.lidar).to(self.device)
-            input_map = Variable(state.map).to(self.device)
             input_image = Variable(state.image).to(self.device)
+            input_mask = Variable(state.mask).to(self.device)
 
             # Infer
-            output = self.policy_net(input_lidar, input_map, input_image)
-            prob = F.softmax(output - output.mean(), dim=1)
+            output = self.policy_net(input_pose, input_lidar, input_image, input_mask)
+            prob = F.softmax(output, dim=1)
 
             action = torch.multinomial(prob, 1)
             print("Prob: {}, Action: {}".format(prob[0], action.item()))

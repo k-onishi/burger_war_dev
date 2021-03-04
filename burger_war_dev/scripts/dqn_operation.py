@@ -11,7 +11,7 @@ import copy
 
 import rospy
 import rosparam
-from geometry_msgs.msg import Pose, Point, Quaternion, Twist, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, Point, Quaternion, Twist, PoseWithCovarianceStamped, Vector3
 from sensor_msgs.msg import Image, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
@@ -28,37 +28,25 @@ from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
 
 from utils.state import State
+from utils.wallAvoid import punish_by_count, punish_by_min_dist, manual_avoid_wall_2
 from agents.agent import Agent
 
 
 # config
 FIELD_SCALE = 2.4
-FIELD_MARKERS = {
-    "Tomato_N": [(1, 8), (1, 9), (2, 8), (2, 9)],
-    "Tomato_S": [(3, 6), (3, 7), (4, 6), (4, 7)],
-    "Omelette_N": [(6, 13), (6, 14), (7, 13), (7, 14)],
-    "Omelette_S": [(8, 11), (8, 12), (9, 11), (9, 12)],
-    "Pudding_N": [(6, 3), (6, 4), (7, 3), (7, 4)],
-    "Pudding_S": [(8, 1), (8, 2), (9, 1), (9, 2)],
-    "OctopusWiener_N": [(11, 8), (11, 9), (12, 8), (12, 9)],
-    "OctopusWiener_S": [(13, 6), (13, 7), (14, 6), (14, 7)],
-    "FriedShrimp_N": [(6, 8), (6, 9), (7, 8), (7, 9)],
-    "FriedShrimp_E": [(8, 8), (8, 9), (9, 8), (9, 9)],
-    "FriedShrimp_W": [(6, 6), (6, 7), (7, 6), (7, 7)],
-    "FriedShrimp_S": [(8, 6), (8, 7), (9, 6), (9, 7)],
+FIELD_MARKERS = [
+    "Tomato_N", "Tomato_S", "Omelette_N", "Omelette_S", "Pudding_N", "Pudding_S",
+    "OctopusWiener_N", "OctopusWiener_S", "FriedShrimp_N", "FriedShrimp_E", "FriedShrimp_W", "FriedShrimp_S"
+]
+ROBOT_MARKERS = {
+    "r": ["RE_B", "RE_L", "RE_R"],
+    "b": ["BL_B", "BL_L", "BL_R"]
 }
-ROBOT_MARKERS = ["BL_B", "BL_L", "BL_R", "RE_B", "RE_L", "RE_R"]
 
 JUDGE_URL = ""
 
 
 # functions
-def get_rotation_matrix(rad, color='r'):
-    if color == 'b' : rad += np.pi
-    rot = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
-    return rot
-
-
 def send_to_judge(url, data):
     res = requests.post(url,
                         json.dumps(data),
@@ -71,16 +59,17 @@ def send_to_judge(url, data):
 class DQNBot:
     """
     An operator to train the dqn agent.
-
-    Attributes:
-        lidar_ranges (tensor, (1, 1, 360)): lidar distance data every 1 deg for 0-360 deg
-        my_pose (array-like, (2, )): my robot's pose (x, y)
-        image (tensor, (1, 3, 480, 640)): camera image
     """
     def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True, save_path=None, load_path=None, manual_avoid=False):
         """
         Args:
-            robot ([type]): [description]
+            robot (str): robot namespace ("r" or "b")
+            online (bool): training is done on online or not
+            policy_mode (str): policy ("epsilon" or "boltzmann")
+            debug (bool): debug mode
+            save_path (str): model save path
+            load_path (str): model load path
+            manual_avoid (bool): manually avoid walls or not
         """
         # attributes
         self.robot = robot
@@ -88,9 +77,11 @@ class DQNBot:
         self.online = online
         self.policy_mode = policy_mode
         self.debug = debug
-        self.my_markers = ROBOT_MARKERS[:3] if robot == "b" else ROBOT_MARKERS[3:]
-        self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
-        self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+        self.my_markers = ROBOT_MARKERS[self.robot]
+        self.op_markers = ROBOT_MARKERS[self.enemy]
+        self.marker_list = FIELD_MARKERS + self.my_markers + self.op_markers
+        self.score = {k: 0 for k in self.marker_list}
+        self.past_score = {k: 0 for k in self.marker_list}
 
         if save_path is None:
             self.save_path = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/tmp.pth"
@@ -101,6 +92,7 @@ class DQNBot:
         self.lidar_ranges = None
         self.my_pose = None
         self.image = None
+        self.mask = None
         self.state = None
         self.past_state = None
         self.action = None
@@ -138,6 +130,8 @@ class DQNBot:
 
         # mode
         self.punish_if_facing_wall = not manual_avoid
+
+        self.punish_far_from_center = True
     
     def callback_lidar(self, data):
         """
@@ -147,7 +141,10 @@ class DQNBot:
             data (LaserScan): distance data of lidar
         """
         raw_lidar = data.ranges
-        raw_lidar = [0.12 if l > 3.5 else l for l in raw_lidar]
+        if min(raw_lidar) < 0.15:
+            raw_lidar = [0.12 if l > 3.5 else l for l in raw_lidar]
+        else:
+            raw_lidar = [3.5 if l > 3.5 else l for l in raw_lidar]
         self.lidar_ranges = torch.FloatTensor(raw_lidar).view(1, 1, -1)   # (1, 1, 360)
 
     def callback_image(self, data):
@@ -174,7 +171,7 @@ class DQNBot:
         """
         x = data.pose.pose.position.x
         y = data.pose.pose.position.y
-        self.my_pose = np.array([x, y])
+        self.my_pose = torch.FloatTensor([x, y]).view(1, 2)
 
     def callback_amcl(self, data):
         """
@@ -185,7 +182,7 @@ class DQNBot:
         """
         x = data.pose.pose.position.x
         y = data.pose.pose.position.y
-        self.my_pose = np.array([-y, x])
+        self.my_pose = torch.FloatTensor([-y, x]).view(1, 2)
 
     def callback_warstate(self, event):
         """
@@ -206,6 +203,14 @@ class DQNBot:
                 elif tg["player"] == self.enemy:
                     self.score[tg["name"]] = -int(tg["point"])
 
+            msk = []
+            for k in self.marker_list:
+                if self.score[k] > 0:    msk.append(0)
+                elif self.score[k] == 0: msk.append(1)
+                else:                    msk.append(2)
+            
+            self.mask = torch.FloatTensor(msk).view(1, 18)
+
     def get_reward(self, past, current):
         """
         reward function.
@@ -221,103 +226,35 @@ class DQNBot:
         diff_op_score = {k: current[k] - past[k] for k in self.my_markers}
 
         # Check LiDAR data to punish for AMCL failure
-        bad_position = 0
-        if self.punish_if_facing_wall and (self.lidar_ranges is not None):
-            lidar_1d = self.lidar_ranges.squeeze()
-            count_too_close = 0
-            
-            # Check each laser and count up if too close
-            for intensity in lidar_1d:
-                if intensity.item() < DIST_TO_WALL_TH:
-                    count_too_close += 1
-
-            # Punish if too many lasers close to obstacle
-            if count_too_close > NUM_LASER_CLOSE_TO_WALL_TH or lidar_1d.min() < 0.15:
-                print("### Too close to the wall, get penalty ###")
-                bad_position = -0.2
+        if self.punish_if_facing_wall:
+            bad_position = punish_by_min_dist(self.lidar_ranges, dist_th=0.15)
+        else:
+            if self.punish_far_from_center:
+                pose = self.my_pose.squeeze()
+                bad_position = punish_by_count(self.lidar_ranges, dist_th=0.2, count_th=90)
+                if abs(pose[0].item()) > 1:
+                    bad_position -= 0.1
+                if abs(pose[1].item()) > 1:
+                    bad_position -= 0.1
+            else:
+                bad_position = 0
 
         plus_diff = sum([v for v in diff_my_score.values() if v > 0])
         minus_diff = sum([v for v in diff_op_score.values() if v < 0])
 
         return plus_diff + minus_diff + bad_position
 
-    def get_map(self):
-        
-        # pose map
-        rotate_matrix = get_rotation_matrix(-45 * np.pi / 180, self.robot)
-        rotated_pose = np.dot(rotate_matrix, self.my_pose) / FIELD_SCALE + 0.5
-        pose_map = np.zeros((16, 16))
-        i = int(rotated_pose[0]*16)
-        j = int(rotated_pose[1]*16)
-        if i < 0: i = 0
-        if i > 15: i = 15
-        if j < 0: j = 0
-        if j > 15: j = 15
-        pose_map[i][j] = 1
-
-        if i != 0:
-            pose_map[i - 1][j] = 0.5
-        if i != 15:
-            pose_map[i + 1][j] = 0.5
-        if j != 0:
-            pose_map[i][j - 1] = 0.5
-        if j != 15:
-            pose_map[i][j + 1] = 0.5
-
-        if i != 0 and j != 0:
-            pose_map[i - 1][j - 1] = 0.25
-        if i != 15 and j != 15:
-            pose_map[i + 1][j + 1] = 0.25
-        if i != 0 and j != 15:
-            pose_map[i - 1][j + 1] = 0.25
-        if i != 15 and j != 0:
-            pose_map[i + 1][j - 1] = 0.25
-        
-        # score map
-        score_map = np.zeros((16, 16))
-        for key, pos in FIELD_MARKERS.items():
-            for p in pos:
-                score_map[p[0], p[1]] = self.score[key]
-
-        # my marker map
-        marker_map = np.zeros((2, 16, 16))
-        if self.robot == "r":
-            r_ch = 0
-            b_ch = 1
-        else:
-            r_ch = 1
-            b_ch = 0
-
-        if self.score["RE_B"] != 0:
-            marker_map[r_ch, :8, :] = 1
-        if self.score["RE_L"] != 0:
-            marker_map[r_ch, 8:, :8] = 1
-        if self.score["RE_R"] != 0:
-            marker_map[r_ch, 8:, 8:] = 1
-        if self.score["BL_B"] != 0:
-            marker_map[b_ch, :8, :] = 1
-        if self.score["BL_L"] != 0:
-            marker_map[b_ch, 8:, :8] = 1
-        if self.score["BL_R"] != 0:
-            marker_map[b_ch, 8:, 8:] = 1
-
-        map_array = np.stack([pose_map, score_map, marker_map[0], marker_map[1]])
-
-        return torch.FloatTensor(map_array).unsqueeze(0)
-
     def strategy(self):
 
         # past state
         self.past_state = self.state
 
-        # get 2d state map
-        map = self.get_map()
-
         # current state
         self.state = State(
-            self.lidar_ranges,     # (1, 1, 360)
-            map,                   # (1, 2, 16, 16)
-            self.image             # (1, 3, 480, 640)
+            self.my_pose,           # (1, 2)
+            self.lidar_ranges,      # (1, 1, 360)
+            self.image,             # (1, 3, 480, 640)
+            self.mask,              # (1, 18)
         )
 
         if self.action is not None:
@@ -330,7 +267,7 @@ class DQNBot:
 
         # manual wall avoidance
         if not self.punish_if_facing_wall:
-            avoid, linear_x, angular_z = self.avoid_wall()
+            avoid, linear_x, angular_z = manual_avoid_wall_2(self.lidar_ranges, dist_th=0.13, back_vel=0.2)
         else:
             avoid = False
 
@@ -363,37 +300,10 @@ class DQNBot:
 
         self.step += 1
 
-    def avoid_wall(self):
-        # check how stacked for each direction
-        front_stacked = torch.sum(self.state.lidar[0][0][:45] < DIST_TO_WALL_TH) \
-                + torch.sum(self.state.lidar[0][0][315:] < DIST_TO_WALL_TH)
-        left_stacked = torch.sum(self.state.lidar[0][0][45:135] < DIST_TO_WALL_TH)
-        rear_stacked = torch.sum(self.state.lidar[0][0][135:225] < DIST_TO_WALL_TH)
-        right_stacked = torch.sum(self.state.lidar[0][0][:315] < DIST_TO_WALL_TH)
-        # if total of stacked is larger than threshold, recover stacked status
-        if front_stacked + left_stacked + rear_stacked + right_stacked > NUM_LASER_CLOSE_TO_WALL_TH:
-            print("### stacked ###")
-            avoid = True
-            SPEED = 0.4
-            RAD = 3.14
-            # decide where to go for recovering stacked status
-            _, linear_x, angular_z = min([
-                (front_stacked, SPEED, .0),
-                (left_stacked, .0, RAD / 2), 
-                (rear_stacked, -SPEED, .0),
-                (right_stacked, .0, -RAD / 2),
-            ], key=lambda e: e[0])
-            
-        else:
-            avoid = False
-            linear_x = None
-            angular_z = None
-
-        return avoid, linear_x, angular_z
-
-    def move_robot(self, model_name, position=None, orientation=None):
+    def move_robot(self, model_name, position=None, orientation=None, linear=None, angular=None):
         state = ModelState()
         state.model_name = model_name
+        # set pose
         pose = Pose()
         if position is not None:
             pose.position = Point(*position)
@@ -401,6 +311,13 @@ class DQNBot:
             tmpq = tft.quaternion_from_euler(*orientation)
             pose.orientation = Quaternion(tmpq[0], tmpq[1], tmpq[2], tmpq[3])
         state.pose = pose
+        # set twist
+        twist = Twist()
+        if linear is not None:
+            twist.linear = Vector3(*linear)
+        if angular is not None:
+            twist.angular = Vector3(*angular)
+        state.twist = twist
         try:
             self.state_service(state)
         except rospy.ServiceException, e:
@@ -440,11 +357,12 @@ class DQNBot:
     def reset(self):
         # reset parameters
         self.step = 0
-        self.score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
-        self.past_score = {k: 0 for k in FIELD_MARKERS.keys() + ROBOT_MARKERS}
+        self.score = {k: 0 for k in self.marker_list}
+        self.past_score = {k: 0 for k in self.marker_list}
         self.lidar_ranges = None
         self.my_pose = None
         self.image = None
+        self.mask = None
         self.state = None
         self.past_state = None
         self.action = None
@@ -453,8 +371,8 @@ class DQNBot:
         subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
 
         # reset robot's positions
-        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57))
-        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57))
+        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
+        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
 
     def train(self, n_epochs=20):
         for epoch in range(n_epochs):
@@ -467,7 +385,7 @@ class DQNBot:
 
         while not rospy.is_shutdown():
             
-            while not all([v is not None for v in [self.lidar_ranges, self.my_pose, self.image]]):
+            while not all([v is not None for v in [self.lidar_ranges, self.my_pose, self.image, self.mask]]):
                 pass
 
             if self.game_state == "stop":
@@ -521,10 +439,10 @@ if __name__ == "__main__":
 
     ONLINE = True
     POLICY = "epsilon"
-    DEBUG = False
-    SAVE_PATH = None #"../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/model_20210228.pth" 
-    LOAD_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/model_20210227.pth" 
-    MANUAL_AVOID = False
+    DEBUG = True
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210304.pth" 
+    LOAD_PATH = None
+    MANUAL_AVOID = True
 
     # wall avoidance
     DIST_TO_WALL_TH = 0.18  #[m]
@@ -532,7 +450,7 @@ if __name__ == "__main__":
 
     # action lists
     VEL = 0.3
-    OMEGA = 0.8
+    OMEGA = 45 * 3.14/180
     ACTION_LIST = [
         [VEL, 0],
         [-VEL, 0],
@@ -543,7 +461,7 @@ if __name__ == "__main__":
     # agent config
     UPDATE_Q_FREQ = 5
     BATCH_SIZE = 16
-    MEM_CAPACITY = 2000
+    MEM_CAPACITY = 1000
     GAMMA = 0.99
     PRIOTIZED = True
     LR = 0.0005
