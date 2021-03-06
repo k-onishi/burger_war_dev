@@ -60,7 +60,8 @@ class DQNBot:
     """
     An operator to train the dqn agent.
     """
-    def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True, save_path=None, load_path=None, manual_avoid=False):
+    def __init__(self, robot="r", online=False, policy_mode="epsilon", debug=True,
+                 save_path=None, load_path=None, pkl_path=None, manual_avoid=False):
         """
         Args:
             robot (str): robot namespace ("r" or "b")
@@ -69,6 +70,7 @@ class DQNBot:
             debug (bool): debug mode
             save_path (str): model save path
             load_path (str): model load path
+            pkl_path (str): dump path
             manual_avoid (bool): manually avoid walls or not
         """
         # attributes
@@ -87,6 +89,8 @@ class DQNBot:
             self.save_path = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/tmp.pth"
         else:
             self.save_path = save_path
+        
+        self.pkl_path = pkl_path
 
         # state variables
         self.lidar_ranges = None
@@ -125,13 +129,21 @@ class DQNBot:
         # agent
         self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
 
+        # load model
         if load_path is not None:
-            self.agent.load(load_path)
+            self.agent.load_model(load_path)
+
+        # load pickle file if exists
+        if self.pkl_path is not None and os.path.exists(self.pkl_path):
+            self.agent.load_memory(self.pkl_path)
 
         # mode
         self.punish_if_facing_wall = not manual_avoid
 
         self.punish_far_from_center = True
+
+        # restart judge server
+        resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
     
     def callback_lidar(self, data):
         """
@@ -344,7 +356,7 @@ class DQNBot:
         self.episode += 1
 
         # restart judge server
-        resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
+        #resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
 
         # restart gazebo physics
         self.unpause_service()
@@ -353,6 +365,10 @@ class DQNBot:
         self.init_amcl_pose()
 
         print("restart the game")
+        os.system('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/restart.sh')
+        print("kill done")
+        os.system('bash ../catkin_ws/src/burger_war_kit/scripts/start.sh -l LEVEL')
+        print("restart done")
 
     def reset(self):
         # reset parameters
@@ -405,7 +421,11 @@ class DQNBot:
                     self.agent.update_target_network()
 
                 # save model
-                self.agent.save(self.save_path)
+                self.agent.save_model(self.save_path)
+
+                # save memory
+                if self.pkl_path is not None:
+                    self.agent.save_memory(self.pkl_path)
 
                 # reset the game
                 self.reset()
@@ -443,6 +463,7 @@ if __name__ == "__main__":
     SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210304.pth" 
     LOAD_PATH = None
     MANUAL_AVOID = True
+    PKL_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/memory.pkl"
 
     # wall avoidance
     DIST_TO_WALL_TH = 0.18  #[m]
@@ -471,7 +492,8 @@ if __name__ == "__main__":
     RATE = 1
 
     try:
-        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG, save_path=SAVE_PATH, load_path=LOAD_PATH, manual_avoid=MANUAL_AVOID)
+        bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG,
+                     save_path=SAVE_PATH, load_path=LOAD_PATH, pkl_path=PKL_PATH, manual_avoid=MANUAL_AVOID)
         bot.run(rospy_rate=RATE)
 
     except rospy.ROSInterruptException:

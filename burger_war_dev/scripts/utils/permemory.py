@@ -6,12 +6,14 @@ import random
 from state import State
 from transition import Transition
 import numpy as np
+from replaymemory import ReplayMemory
 
-class PERMemory:
+class PERMemory(ReplayMemory):
     epsilon = 0.0001
     alpha = 0.6
 
     def __init__(self, CAPACITY):
+        super(PERMemory, self).__init__(CAPACITY)
         self.tree = SumTree(CAPACITY)
         self.size = 0
 

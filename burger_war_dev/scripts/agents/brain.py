@@ -16,9 +16,10 @@ from torch.autograd import Variable
 
 from utils.state import State
 from utils.transition import Transition
-from utils.replaymemory import ReplayMemory
+from utils.random_replaymemory import RandomReplayMemory
 from utils.permemory import PERMemory
 from networks.maskNet import MaskNet
+import pickle
 
 #------------------------------------------------
 
@@ -36,7 +37,7 @@ class Brain:
             self.memory = PERMemory(capacity)
         else:
             print('* Random Experience Replay Mode')
-            self.memory = ReplayMemory(capacity)
+            self.memory = RandomReplayMemory(capacity)
 
         # Build network
         self.policy_net = MaskNet(self.num_actions)
@@ -225,16 +226,27 @@ class Brain:
 
         return action  # FloatTensor size 1x1
 
-    def save(self, path):
+    def save_model(self, path):
         # Save a model checkpoint.
         print('Saving model...: {}'.format(path))
         torch.save(self.policy_net.state_dict(), path)
 
-    def load(self, path):
+    def load_model(self, path):
         print('Loading model...: {}'.format(path))
         model = torch.load(path)
         self.policy_net.load_state_dict(model)
         self.update_target_network()
+
+    def save_memory(self, path):
+        print('Saving memory (size={})...: {}'.format(len(self.memory) ,path))
+        with open(path, 'wb') as f:
+            pickle.dump(self.memory, f)
+
+    def load_memory(self, path):
+        print('Loading memory...: {}'.format(path))
+        with open(path, 'rb') as f:
+            self.memory =  pickle.load(f)
+            print('Loaded memory (size={})'.format(len(self.memory)))
 
     def update_target_network(self):
         self.target_net.load_state_dict(self.policy_net.state_dict())
