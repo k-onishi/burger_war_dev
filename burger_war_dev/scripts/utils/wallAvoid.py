@@ -19,7 +19,7 @@ def punish_by_count(lidar, dist_th=0.2, count_th=90):
         # Punish if too many lasers close to obstacle
         if count_too_close > count_th:
             print("### Too close to the wall, get penalty ###")
-            punish = -0.5
+            punish = -1.0
 
     return punish
 

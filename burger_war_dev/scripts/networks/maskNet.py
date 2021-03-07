@@ -91,10 +91,10 @@ class MaskNet(nn.Module):
         w = self.conv1(w)           # (N, 18, 64)
 
         ## Mask
-        m = self.mask_fc(mask)      # (N, 18)
-        m = m.view(-1, 1, 18)       # (N, 1, 18)
-        w = torch.matmul(m, w)      # (N, 1, 64)
-        w = w.view(-1, 64)          # (N, 64)
+        # mask = self.mask_fc(mask)           # (N, 18)
+        mask = mask.view(-1, 1, 18)         # (N, 1, 18)
+        w = torch.matmul(mask, w)           # (N, 1, 64)
+        w = w.view(-1, 64)                  # (N, 64)
 
         ## Head
         w = self.fc2(w)

@@ -82,11 +82,15 @@ class DQNBot:
         self.marker_list = FIELD_MARKERS + self.my_markers + self.op_markers
         self.score = {k: 0 for k in self.marker_list}
         self.past_score = {k: 0 for k in self.marker_list}
+        self.my_score = 0
+        self.op_score = 0
 
         if save_path is None:
             self.save_path = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/tmp.pth"
         else:
             self.save_path = save_path
+
+        self.load_path = load_path
 
         # state variables
         self.lidar_ranges = None
@@ -110,7 +114,7 @@ class DQNBot:
 
         if self.debug:
             if self.robot == "r": self.odom_sub = rospy.Subscriber("red_bot/tracker", Odometry, self.callback_odom)
-            if self.robot == "b": self.odom_sub = rospy.Subscriber("enemy_bot/tracker", Odometry, self.callback_odom)
+            if self.robot == "b": self.odom_sub = rospy.Subscriber("tracker", Odometry, self.callback_odom)
         else:
             self.amcl_sub = rospy.Subscriber("amcl_pose", PoseWithCovarianceStamped, self.callback_amcl)
 
@@ -125,8 +129,8 @@ class DQNBot:
         # agent
         self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
 
-        if load_path is not None:
-            self.agent.load(load_path)
+        if self.load_path is not None:
+            self.agent.load(self.load_path)
 
         # mode
         self.punish_if_facing_wall = not manual_avoid
@@ -171,6 +175,9 @@ class DQNBot:
         """
         x = data.pose.pose.position.x
         y = data.pose.pose.position.y
+        if self.robot == "b":
+            x *= -1
+            y *= -1
         self.my_pose = torch.FloatTensor([x, y]).view(1, 2)
 
     def callback_amcl(self, data):
@@ -195,6 +202,9 @@ class DQNBot:
         resp = requests.get(JUDGE_URL + "/warState")
         json_dict = json.loads(resp.text)
         self.game_state = json_dict['state']
+        self.my_score = int(json_dict['scores'][self.robot])
+        self.op_score = int(json_dict['scores'][self.enemy])
+        #print("name:{}, state:{}, score:{}".format(self.robot, self.game_state, self.my_score))
         
         if self.game_state == "running":            
             for tg in json_dict["targets"]:
@@ -207,7 +217,7 @@ class DQNBot:
             for k in self.marker_list:
                 if self.score[k] > 0:    msk.append(0)
                 elif self.score[k] == 0: msk.append(1)
-                else:                    msk.append(2)
+                else:                    msk.append(1)
             
             self.mask = torch.FloatTensor(msk).view(1, 18)
 
@@ -227,17 +237,24 @@ class DQNBot:
 
         # Check LiDAR data to punish for AMCL failure
         if self.punish_if_facing_wall:
-            bad_position = punish_by_min_dist(self.lidar_ranges, dist_th=0.15)
-        else:
+            #bad_position = punish_by_count(self.lidar_ranges, dist_th=DIST_TO_WALL_TH, count_th=NUM_LASER_CLOSE_TO_WALL_TH)
+            bad_position = punish_by_min_dist(self.lidar_ranges, dist_th=0.13)
             if self.punish_far_from_center:
                 pose = self.my_pose.squeeze()
-                bad_position = punish_by_count(self.lidar_ranges, dist_th=0.2, count_th=90)
-                if abs(pose[0].item()) > 1:
-                    bad_position -= 0.1
-                if abs(pose[1].item()) > 1:
-                    bad_position -= 0.1
-            else:
-                bad_position = 0
+                if abs(pose[0].item()) > 1.0:
+                    bad_position -= 0.25
+                if abs(pose[1].item()) > 1.0:
+                    bad_position -= 0.25
+        # else:
+        #     if self.punish_far_from_center:
+        #         pose = self.my_pose.squeeze()
+        #         bad_position = punish_by_count(self.lidar_ranges, dist_th=0.2, count_th=90)
+        #         if abs(pose[0].item()) > 1:
+        #             bad_position -= 0.1
+        #         if abs(pose[1].item()) > 1:
+        #             bad_position -= 0.1
+        #     else:
+        #         bad_position = 0
 
         plus_diff = sum([v for v in diff_my_score.values() if v > 0])
         minus_diff = sum([v for v in diff_op_score.values() if v < 0])
@@ -275,8 +292,11 @@ class DQNBot:
             self.action = None
         else:
             # get action from agent
-            if self.step % 3 == 0:
-                policy = "boltzmann"
+            if self.robot == "r":
+                if self.episode % 2 == 0:
+                    policy = "boltzmann"
+                else:
+                    policy = "epsilon"
             else:
                 policy = "epsilon"
 
@@ -338,27 +358,32 @@ class DQNBot:
         amcl_init_pub.publish(amcl_pose)
 
     def stop(self):
-        self.pause_service()
+        if self.robot == "r":
+            rospy.sleep(0.5)
+            self.pause_service()
 
     def restart(self):
         self.episode += 1
 
-        # restart judge server
-        resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
+        if self.robot == "r":
+            # restart judge server
+            resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
 
-        # restart gazebo physics
-        self.unpause_service()
+            # restart gazebo physics
+            self.unpause_service()
 
         # reset amcl pose
         self.init_amcl_pose()
 
-        print("restart the game")
+        print("restart the game by {}".format(self.robot))
 
     def reset(self):
         # reset parameters
         self.step = 0
         self.score = {k: 0 for k in self.marker_list}
         self.past_score = {k: 0 for k in self.marker_list}
+        self.my_score = 0
+        self.op_score = 0
         self.lidar_ranges = None
         self.my_pose = None
         self.image = None
@@ -367,12 +392,13 @@ class DQNBot:
         self.past_state = None
         self.action = None
 
-        # reset judge server
-        subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
+        if self.robot == "r":
+            # reset judge server
+            subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
 
-        # reset robot's positions
-        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
-        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
+            # reset robot's positions
+            self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
+            self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
 
     def train(self, n_epochs=20):
         for epoch in range(n_epochs):
@@ -405,7 +431,16 @@ class DQNBot:
                     self.agent.update_target_network()
 
                 # save model
-                self.agent.save(self.save_path)
+                if self.my_score > self.op_score:
+                    self.agent.save(self.save_path)
+                    print("{} Win the Game and Save model".format(self.robot))
+                else:
+                    time.sleep(1.5)
+                    try:
+                        self.agent.load(self.save_path)
+                        print("{} Lose the Game and Load model".format(self.robot))
+                    except:
+                        print("{} cannot load model".format(self.robot))
 
                 # reset the game
                 self.reset()
@@ -433,20 +468,25 @@ if __name__ == "__main__":
     try:
         ROBOT_NAME = rosparam.get_param('DQNRun/side')
     except:
-        ROBOT_NAME = rosparam.get_param('enemyRun/side')
+        try:
+            ROBOT_NAME = rosparam.get_param('enemyRun/side')
+        except:
+            ROBOT_NAME = "b"
+
+    print("name: {}, server: {}".format(ROBOT_NAME, JUDGE_URL))
 
     # parameters
 
     ONLINE = True
     POLICY = "epsilon"
     DEBUG = True
-    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210304.pth" 
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210307.pth"
     LOAD_PATH = None
-    MANUAL_AVOID = True
+    MANUAL_AVOID = False
 
     # wall avoidance
-    DIST_TO_WALL_TH = 0.18  #[m]
-    NUM_LASER_CLOSE_TO_WALL_TH = 90
+    DIST_TO_WALL_TH = 0.18
+    NUM_LASER_CLOSE_TO_WALL_TH = 30
 
     # action lists
     VEL = 0.3
@@ -461,9 +501,9 @@ if __name__ == "__main__":
     # agent config
     UPDATE_Q_FREQ = 5
     BATCH_SIZE = 16
-    MEM_CAPACITY = 1000
+    MEM_CAPACITY = 2000
     GAMMA = 0.99
-    PRIOTIZED = True
+    PRIOTIZED = False
     LR = 0.0005
     EPOCHS = 20
 

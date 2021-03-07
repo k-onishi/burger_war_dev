@@ -174,13 +174,13 @@ class Brain:
 
         if policy_mode == "epsilon":
             # ε-greedy法で徐々に最適行動のみを採用する
-            # epsilon = 0.5 * (1 / (episode + 1))
-            if episode < 50:
-                epsilon = 0.25
-            elif episode < 100:
-                epsilon = 0.15
-            else:
-                epsilon = 0.05
+            epsilon = 0.5 * (1 / (episode + 1))
+            # if episode < 50:
+            #     epsilon = 0.25
+            # elif episode < 100:
+            #     epsilon = 0.15
+            # else:
+            #     epsilon = 0.05
 
             if epsilon <= np.random.uniform(0, 1):
                 self.policy_net.eval()  # ネットワークを推論モードに切り替える
