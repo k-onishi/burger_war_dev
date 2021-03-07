@@ -365,10 +365,6 @@ class DQNBot:
         self.init_amcl_pose()
 
         print("restart the game")
-        os.system('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/restart.sh')
-        print("kill done")
-        os.system('bash ../catkin_ws/src/burger_war_kit/scripts/start.sh -l LEVEL')
-        print("restart done")
 
     def reset(self):
         # reset parameters
@@ -384,11 +380,11 @@ class DQNBot:
         self.action = None
 
         # reset judge server
-        subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
+        #subprocess.call('bash ../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/reset.sh', shell=True)
 
         # reset robot's positions
-        self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
-        self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
+        #self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
+        #self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
 
     def train(self, n_epochs=20):
         for epoch in range(n_epochs):
