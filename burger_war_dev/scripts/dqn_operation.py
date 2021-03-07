@@ -29,8 +29,6 @@ from cv_bridge import CvBridge, CvBridgeError
 
 from utils.state import State
 from utils.wallAvoid import punish_by_count, punish_by_min_dist, manual_avoid_wall_2
-from agents.agent import Agent
-
 
 # config
 FIELD_SCALE = 2.4
@@ -127,8 +125,15 @@ class DQNBot:
         self.unpause_service = rospy.ServiceProxy('/gazebo/unpause_physics', Empty)
 
         # agent
-        self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
-
+        if self.debug:
+            # connect to agent server
+            from agents.agent_conn import AgentClient
+            self.agent = AgentClient(server_address='127.0.0.1', port=5010,
+                                     num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
+        else:
+            # create agent in this process
+            from agents.agent import Agent
+            self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
         # load model
         if load_path is not None:
             self.agent.load_model(load_path)
@@ -141,9 +146,6 @@ class DQNBot:
         self.punish_if_facing_wall = not manual_avoid
 
         self.punish_far_from_center = True
-
-        # restart judge server
-        resp = send_to_judge(JUDGE_URL + "/warState/state", {"state": "running"})
     
     def callback_lidar(self, data):
         """
@@ -386,6 +388,10 @@ class DQNBot:
         #self.move_robot("red_bot", (0.0, -1.3, 0.0), (0, 0, 1.57), (0, 0, 0), (0, 0, 0))
         #self.move_robot("blue_bot", (0.0, 1.3, 0.0), (0, 0, -1.57), (0, 0, 0), (0, 0, 0))
 
+        # detach agent
+        if self.debug:
+            self.agent.detach()
+
     def train(self, n_epochs=20):
         for epoch in range(n_epochs):
             print("episode {}: epoch {}".format(self.episode, epoch))
@@ -459,7 +465,7 @@ if __name__ == "__main__":
     SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210304.pth" 
     LOAD_PATH = None
     MANUAL_AVOID = True
-    PKL_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/memory.pkl"
+    PKL_PATH = None
 
     # wall avoidance
     DIST_TO_WALL_TH = 0.18  #[m]

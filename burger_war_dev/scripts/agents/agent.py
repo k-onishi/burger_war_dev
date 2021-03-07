@@ -86,3 +86,9 @@ class Agent:
         update target network model
         """
         self.brain.update_target_network()
+    
+    def detach(self):
+        """
+        detach agent (for server-client implementation)
+        """
+        pass
