@@ -292,7 +292,7 @@ class DQNBot:
             self.action = None
         else:
             # get action from agent
-            if self.robot == "r":
+            if self.robot == "b":
                 if self.episode % 2 == 0:
                     policy = "boltzmann"
                 else:
@@ -480,7 +480,7 @@ if __name__ == "__main__":
     ONLINE = True
     POLICY = "epsilon"
     DEBUG = True
-    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210307.pth"
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210308.pth"
     LOAD_PATH = None
     MANUAL_AVOID = False
 
@@ -499,7 +499,7 @@ if __name__ == "__main__":
     ]
 
     # agent config
-    UPDATE_Q_FREQ = 5
+    UPDATE_Q_FREQ = 10
     BATCH_SIZE = 16
     MEM_CAPACITY = 2000
     GAMMA = 0.99

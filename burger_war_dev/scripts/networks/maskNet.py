@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MaskNet(nn.Module):
-    def __init__(self, output_size):
+    def __init__(self, output_size, duel=False):
         """
         Args:
             output_size (int): size of output
         """
         super(MaskNet, self).__init__()
+        self.duel = duel
 
         '''
         # input state
@@ -75,6 +76,10 @@ class MaskNet(nn.Module):
         )
         # head
         self.fc2 = nn.Linear(64, output_size)
+    
+        # Dueling network
+        self.fc_adv = nn.Linear(64, output_size)
+        self.fc_val = nn.Linear(64, 1)
 
     def forward(self, pose, lidar, image, mask):
         # Core network
@@ -91,15 +96,22 @@ class MaskNet(nn.Module):
         w = self.conv1(w)           # (N, 18, 64)
 
         ## Mask
-        # mask = self.mask_fc(mask)           # (N, 18)
+        mask = self.mask_fc(mask)           # (N, 18)
         mask = mask.view(-1, 1, 18)         # (N, 1, 18)
         w = torch.matmul(mask, w)           # (N, 1, 64)
         w = w.view(-1, 64)                  # (N, 64)
 
         ## Head
-        w = self.fc2(w)
+        if not self.duel:
+            w = self.fc2(w)
+        else:
+            # Dueling network
+            adv = self.fc_adv(w)
+            val = self.fc_val(w).expand(-1, adv.size(1))
+            w = val + adv - adv.mean(1, keepdim=True).expand(-1, adv.size(1))
 
         return w
+
 
 if __name__ == '__main__':
     def example(net, device_name):
