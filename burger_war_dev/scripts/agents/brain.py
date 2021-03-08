@@ -112,6 +112,15 @@ class Brain:
         # 次の状態がない場合は0にしておく
         next_state_values = Variable(torch.zeros(self.batch_size).type(torch.FloatTensor)).to(self.device)
 
+        # double dqn part
+        a_m = Variable(torch.zeros(self.batch_size).type(torch.LongTensor)).to(self.device)
+        a_m[non_final_mask] = self.policy_net(non_final_next_poses,
+                                            non_final_next_lidars,
+                                            non_final_next_images,
+                                            non_final_next_masks).max(1)[1].detach()
+
+        a_m_non_final_next_states = a_m[non_final_mask].view(-1, 1)
+
         # 次の状態がある場合の値を求める
         # 出力であるdataにアクセスし、max(1)で列方向の最大値の[値、index]を求めます
         # そしてその値（index=0）を出力します
@@ -120,7 +129,7 @@ class Brain:
                                                 non_final_next_lidars,
                                                 non_final_next_images,
                                                 non_final_next_masks
-                                            ).data.max(1)[0].detach()
+                                            ).gather(1, a_m_non_final_next_states).detach().squeeze()
 
         # 教師となるQ(s_t, a_t)値を求める
         expected_state_action_values = reward_batch + self.gamma * next_state_values
