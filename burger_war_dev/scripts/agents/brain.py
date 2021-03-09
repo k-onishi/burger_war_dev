@@ -39,8 +39,8 @@ class Brain:
             self.memory = ReplayMemory(capacity)
 
         # Build network
-        self.policy_net = MaskNet(self.num_actions, duel=True)
-        self.target_net = MaskNet(self.num_actions, duel=True)
+        self.policy_net = MaskNet(self.num_actions, duel=False)
+        self.target_net = MaskNet(self.num_actions, duel=False)
         self.target_net.eval()
 
         # Set device type; GPU or CPU (Use GPU if available)
