@@ -29,6 +29,7 @@ from cv_bridge import CvBridge, CvBridgeError
 
 from utils.state import State
 from utils.wallAvoid import punish_by_count, punish_by_min_dist, manual_avoid_wall_2
+from utils.lidar_transform import lidar_transform
 from agents.agent import Agent
 
 
@@ -143,11 +144,8 @@ class DQNBot:
         Args:
             data (LaserScan): distance data of lidar
         """
-        raw_lidar = data.ranges
-        if min(raw_lidar) < 0.15:
-            raw_lidar = [0.12 if l > 3.5 else l for l in raw_lidar]
-        else:
-            raw_lidar = [3.5 if l > 3.5 else l for l in raw_lidar]
+        raw_lidar = np.array(data.ranges)
+        raw_lidar = lidar_transform(raw_lidar, self.debug)
         self.lidar_ranges = torch.FloatTensor(raw_lidar).view(1, 1, -1)   # (1, 1, 360)
 
     def callback_image(self, data):
@@ -408,7 +406,7 @@ class DQNBot:
             while not all([v is not None for v in [self.lidar_ranges, self.my_pose, self.image, self.mask]]):
                 pass
 
-            if self.game_state == "stop":
+            if self.game_state == "stop" and self.debug:
                 
                 if not self.debug:
                     break
@@ -473,9 +471,9 @@ if __name__ == "__main__":
 
     ONLINE = True
     POLICY = "epsilon"
-    DEBUG = False
+    DEBUG = True
     SAVE_PATH = None
-    LOAD_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210310_1738.pth"
+    LOAD_PATH = None
     MANUAL_AVOID = False
 
     # wall avoidance
@@ -483,11 +481,12 @@ if __name__ == "__main__":
     NUM_LASER_CLOSE_TO_WALL_TH = 30
 
     # action lists
-    VEL = 0.3
-    OMEGA = 45 * 3.14/180
+    VEL = 0.2
+    OMEGA = 30 * 3.14/180
     ACTION_LIST = [
         [VEL, 0],
         [-VEL, 0],
+        [0, 0],
         [0, OMEGA],
         [0, -OMEGA],
     ]
