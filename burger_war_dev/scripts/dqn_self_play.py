@@ -130,7 +130,7 @@ class DQNBot:
         self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
 
         if self.load_path is not None:
-            self.agent.load(self.load_path)
+            self.agent.load_model(self.load_path)
 
         # mode
         self.punish_if_facing_wall = not manual_avoid
@@ -426,12 +426,12 @@ class DQNBot:
 
                 # save model
                 if self.my_score > self.op_score:
-                    self.agent.save(self.save_path)
+                    self.agent.save_model(self.save_path)
                     print("{} Win the Game and Save model".format(self.robot))
                 else:
                     time.sleep(1.5)
                     try:
-                        self.agent.load(self.save_path)
+                        self.agent.load_model(self.save_path)
                         print("{} Lose the Game and Load model".format(self.robot))
                     except:
                         print("{} cannot load model".format(self.robot))
@@ -473,9 +473,9 @@ if __name__ == "__main__":
 
     ONLINE = True
     POLICY = "epsilon"
-    DEBUG = True
-    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210308.pth"
-    LOAD_PATH = None
+    DEBUG = False
+    SAVE_PATH = None
+    LOAD_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210310_1738.pth"
     MANUAL_AVOID = False
 
     # wall avoidance
