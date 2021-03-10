@@ -24,7 +24,6 @@ import cv2
 import torch
 import torchvision
 import numpy as np
-from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
 
 from utils.state import State
@@ -156,9 +155,25 @@ class DQNBot:
         """
         try:
             img = self.bridge.imgmsg_to_cv2(data, "bgr8")
-            img = IMG.fromarray(img)
-            img = torchvision.transforms.ToTensor()(img)
-            self.image = img.unsqueeze(0)                   # (1, 3, 480, 640)
+
+            # preprocess image
+            #img = img[100:, :]   # 640x380[px]
+            deriv_x = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=5)
+            deriv_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=5)
+            grad = np.sqrt(deriv_x ** 2 + deriv_x ** 2)
+            
+            def min_max(x, axis=None):
+                min = x.min(axis=axis, keepdims=True)
+                max = x.max(axis=axis, keepdims=True)
+                result = (x-min)/(max-min)
+                return result
+
+            # visualize preprocessed image for debug
+            #cv2.imshow('grad', min_max(grad))
+            #cv2.waitKey(1)
+
+            img = torchvision.transforms.ToTensor()(grad)
+            self.image = img.unsqueeze(0)                   # (1, 3, 380, 640)
         except CvBridgeError as e:
             rospy.logerr(e)
     

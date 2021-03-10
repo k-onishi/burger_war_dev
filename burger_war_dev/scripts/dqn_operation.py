@@ -24,12 +24,13 @@ import cv2
 import torch
 import torchvision
 import numpy as np
-from PIL import Image as IMG
 from cv_bridge import CvBridge, CvBridgeError
 
 from utils.state import State
 from utils.wallAvoid import punish_by_count, punish_by_min_dist, manual_avoid_wall_2
 from utils.lidar_transform import lidar_transform
+
+import cv2
 
 # config
 FIELD_SCALE = 2.4
@@ -167,10 +168,26 @@ class DQNBot:
             data (Image): image from from camera mounted on the robot
         """
         try:
-            img = self.bridge.imgmsg_to_cv2(data, "bgr8")
-            img = IMG.fromarray(img)
-            img = torchvision.transforms.ToTensor()(img)
-            self.image = img.unsqueeze(0)                   # (1, 3, 480, 640)
+            img = self.bridge.imgmsg_to_cv2(data, "bgr8")  # 640x480[px]
+
+            # preprocess image
+            #img = img[100:, :]   # 640x380[px]
+            deriv_x = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=5)
+            deriv_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=5)
+            grad = np.sqrt(deriv_x ** 2 + deriv_x ** 2)
+            
+            def min_max(x, axis=None):
+                min = x.min(axis=axis, keepdims=True)
+                max = x.max(axis=axis, keepdims=True)
+                result = (x-min)/(max-min)
+                return result
+
+            # visualize preprocessed image for debug
+            #cv2.imshow('grad', min_max(grad))
+            #cv2.waitKey(1)
+
+            img = torchvision.transforms.ToTensor()(grad)
+            self.image = img.unsqueeze(0)                   # (1, 3, 380, 640)
         except CvBridgeError as e:
             rospy.logerr(e)
     
@@ -460,7 +477,8 @@ if __name__ == "__main__":
     ONLINE = True
     POLICY = "epsilon"
     DEBUG = True
-    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210304.pth" 
+    
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210311_0019.pth" 
     LOAD_PATH = None
     MANUAL_AVOID = True
     PKL_PATH = None
