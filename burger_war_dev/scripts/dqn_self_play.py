@@ -154,26 +154,28 @@ class DQNBot:
             data (Image): image from from camera mounted on the robot
         """
         try:
-            img = self.bridge.imgmsg_to_cv2(data, "bgr8")
+            img = self.bridge.imgmsg_to_cv2(data, "bgr8")  # 640x480[px]
 
             # preprocess image
-            #img = img[100:, :]   # 640x380[px]
+            img = img[100:, :]   # 640x380[px]
+            img = cv2.resize(img, (160, 95))
             deriv_x = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=5)
             deriv_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=5)
             grad = np.sqrt(deriv_x ** 2 + deriv_x ** 2)
             
+            '''
+            # visualize preprocessed image for debug
             def min_max(x, axis=None):
                 min = x.min(axis=axis, keepdims=True)
                 max = x.max(axis=axis, keepdims=True)
                 result = (x-min)/(max-min)
                 return result
-
-            # visualize preprocessed image for debug
-            #cv2.imshow('grad', min_max(grad))
-            #cv2.waitKey(1)
+            cv2.imshow('grad', min_max(grad))
+            cv2.waitKey(1)
+            '''
 
             img = torchvision.transforms.ToTensor()(grad)
-            self.image = img.unsqueeze(0)                   # (1, 3, 380, 640)
+            self.image = img.unsqueeze(0)                   # (1, 3, 95, 160)
         except CvBridgeError as e:
             rospy.logerr(e)
     

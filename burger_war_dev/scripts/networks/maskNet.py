@@ -43,20 +43,20 @@ class MaskNet(nn.Module):
         )
 
         self.block_image = nn.Sequential(
-            # Input size: (1, 3, 480, 640)
-            nn.Conv2d(3, 16, kernel_size=5, stride=2),  # (N, 16, 238, 318)
+            # Input size: (1, 3, 95, 160)
+            nn.Conv2d(3, 16, kernel_size=3, padding=1),  # (N, 16, 95, 160)
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3),                # (N, 16, 79, 106)
-            nn.Conv2d(16, 32, kernel_size=5, stride=2), # (N, 32, 38, 51)
+            nn.MaxPool2d(kernel_size=4),                 # (N, 16, 23, 40)
+            nn.Conv2d(16, 32, kernel_size=3, padding=1), # (N, 32, 23, 40)
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2),                # (N, 32, 19, 25)
-            nn.Conv2d(32, 32, kernel_size=5, stride=2), # (N, 32, 8, 11)
+            nn.MaxPool2d(kernel_size=4),                 # (N, 32, 5, 10)
+            nn.Conv2d(32, 32, kernel_size=3, padding=1), # (N, 32, 5, 10)
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.Flatten(),
-            nn.Linear(32*8*11, 64)
+            nn.Linear(32*5*10, 64)
         )
         
         # middle
@@ -138,7 +138,7 @@ if __name__ == '__main__':
     data_sizes = [
         (2, 2),
         (2, 1, 360),
-        (2, 3, 480, 640),
+        (2, 3, 95, 160),
         (2, 18),
     ]
     #summary(net, data_sizes)
