@@ -250,10 +250,9 @@ class DQNBot:
             bad_position = punish_by_min_dist(self.lidar_ranges, dist_th=0.13)
             if self.punish_far_from_center:
                 pose = self.my_pose.squeeze()
-                if abs(pose[0].item()) > 1.0:
-                    bad_position -= 0.25
-                if abs(pose[1].item()) > 1.0:
-                    bad_position -= 0.25
+                dist_from_center = torch.sqrt(torch.pow(pose, 2).sum()).item()
+                if dist_from_center > 1.0:
+                    bad_position -= 1.0
         # else:
         #     if self.punish_far_from_center:
         #         pose = self.my_pose.squeeze()
@@ -368,6 +367,7 @@ class DQNBot:
 
     def stop(self):
         if self.robot == "r":
+            print("***** EPISODE {} DONE *****".format(self.episode))
             rospy.sleep(0.5)
             self.pause_service()
 
@@ -442,6 +442,8 @@ class DQNBot:
                 # save model
                 if self.my_score > self.op_score:
                     self.agent.save_model(self.save_path)
+                    if self.episode % 100 == 0:
+                        self.agent.save_model(self.save_path.split(".pth")[0] + "_ckpt_{}.pth".format(self.episode))
                     print("{} Win the Game and Save model".format(self.robot))
                 else:
                     time.sleep(1.5)
@@ -489,7 +491,7 @@ if __name__ == "__main__":
     ONLINE = True
     POLICY = "epsilon"
     DEBUG = True
-    SAVE_PATH = None
+    SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210314.pth"
     LOAD_PATH = None
     MANUAL_AVOID = False
 
