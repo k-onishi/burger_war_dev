@@ -490,7 +490,7 @@ if __name__ == "__main__":
 
     ONLINE = True
     POLICY = "epsilon"
-    DEBUG = True
+    DEBUG = False
     SAVE_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210314.pth"
     LOAD_PATH = None
     MANUAL_AVOID = False
