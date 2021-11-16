@@ -418,11 +418,13 @@ class DQNBot:
 
         r = rospy.Rate(rospy_rate)
 
+        print("start running")
         while not rospy.is_shutdown():
             
             while not all([v is not None for v in [self.lidar_ranges, self.my_pose, self.image, self.mask]]):
                 pass
 
+            print("game state: {}".format(self.game_state))
             if self.game_state == "stop" and self.debug:
                 
                 if not self.debug:
@@ -441,7 +443,9 @@ class DQNBot:
 
                 # save model
                 if self.my_score > self.op_score:
+                    print("save model")
                     self.agent.save_model(self.save_path)
+                    print("saved")
                     if self.episode % 100 == 0:
                         self.agent.save_model(self.save_path.split(".pth")[0] + "_ckpt_{}.pth".format(self.episode))
                     print("{} Win the Game and Save model".format(self.robot))
@@ -490,7 +494,8 @@ if __name__ == "__main__":
 
     ONLINE = True
     POLICY = "epsilon"
-    DEBUG = False
+    DEBUG = True
+    # DEBUG = False
     SAVE_PATH = None
     LOAD_PATH = "../catkin_ws/src/burger_war_dev/burger_war_dev/scripts/models/20210314.pth"
     MANUAL_AVOID = False

@@ -136,18 +136,23 @@ class DQNBot:
             # create agent in this process
             from agents.agent import Agent
             self.agent = Agent(num_actions=len(ACTION_LIST), batch_size=BATCH_SIZE, capacity=MEM_CAPACITY, gamma=GAMMA, prioritized=PRIOTIZED, lr=LR)
+        print("load model")
         # load model
         if load_path is not None:
             self.agent.load_model(load_path)
+        print("model loaded")
 
         # load pickle file if exists
         if self.pkl_path is not None and os.path.exists(self.pkl_path):
             self.agent.load_memory(self.pkl_path)
+        print("pickle loaded")
 
         # mode
         self.punish_if_facing_wall = not manual_avoid
 
         self.punish_far_from_center = True
+
+        print("initialization completed")
     
     def callback_lidar(self, data):
         """
@@ -512,6 +517,7 @@ if __name__ == "__main__":
     # time freq [Hz]
     RATE = 1
 
+    print("torii operation")
     try:
         bot = DQNBot(robot=ROBOT_NAME, online=ONLINE, policy_mode=POLICY, debug=DEBUG,
                      save_path=SAVE_PATH, load_path=LOAD_PATH, pkl_path=PKL_PATH, manual_avoid=MANUAL_AVOID)

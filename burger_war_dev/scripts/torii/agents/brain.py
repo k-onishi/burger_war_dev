@@ -55,6 +55,7 @@ class Brain:
 
         # Configure optimizer
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        print("brain initialized")
 
     def replay(self):
         """Experience Replayでネットワークの重みを学習 """
@@ -243,8 +244,11 @@ class Brain:
     def load_model(self, path):
         print('Loading model...: {}'.format(path))
         model = torch.load(path)
+        print("load model in brain")
         self.policy_net.load_state_dict(model)
+        print("load policy net")
         self.update_target_network()
+        print("update target network")
 
     def save_memory(self, path):
         print('Saving memory (size={})...: {}'.format(len(self.memory) ,path))
