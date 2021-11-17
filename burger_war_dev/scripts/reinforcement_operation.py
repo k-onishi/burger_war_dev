@@ -259,6 +259,7 @@ if __name__ == "__main__":
             ACTION_LIST,
             model_path,
             memory_path,
+            is_training=episode>=0,
         )
         bot.run()
     except rospy.ROSInterruptException:

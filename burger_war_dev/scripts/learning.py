@@ -4,12 +4,15 @@ import requests
 import subprocess
 import time
 
+import optuna
+
 
 HOME = os.environ['HOME']
 AWAKE_INTERVAL = 20
 JUDGE_URL = "http://127.0.0.1:5000"
 ROBOT = "r"
 ENEMY = "b"
+NUM_TEST_TRIALS = 5
 
 def grep_pid(cmd):
     with subprocess.Popen(["ps", "aux"], stdout=subprocess.PIPE) as ps:
@@ -41,20 +44,20 @@ def game(
         memory_path="/tmp/memory.pickle"
     ):
     with subprocess.Popen(
-            ["gnome-terminal", "--", "bash", "scripts/sim_with_judge.sh",
-                "-b", "{}".format(batch_size),
-                "-c", "{}".format(capacity),
-                "-e", "{}".format(episode),
-                "-g", "{}".format(gamma),
-                "-r", "{}".format(learning_rate),
-                "-m", "{}".format(model_path),
-                "-p", "{}".format(memory_path),
-            ],
+            ["gnome-terminal", "--", "bash", "scripts/sim_with_judge.sh"],
             cwd="{}/catkin_ws/src/burger_war_kit".format(HOME)
         ):
         time.sleep(AWAKE_INTERVAL)
         with subprocess.Popen(
-                ["gnome-terminal", "--", "bash", "scripts/start.sh"],
+                ["gnome-terminal", "--", "bash", "scripts/start.sh",
+                    "-b", "{}".format(batch_size),
+                    "-c", "{}".format(capacity),
+                    "-e", "{}".format(episode),
+                    "-g", "{}".format(gamma),
+                    "-r", "{}".format(learning_rate),
+                    "-m", "{}".format(model_path),
+                    "-p", "{}".format(memory_path),
+                ],
                 cwd="{}/catkin_ws/src/burger_war_kit".format(HOME)
             ):
             while not grep_pid("reinforcement_operation.py"):
@@ -73,14 +76,62 @@ def game(
             )
     return state_dict
 
-if __name__ == "__main__":
-    for i in range(2):
-        state_dict = game(episode=i)
+def objective(trial):
+    epoch = trial.suggest_int('epoch', 20, 200)
+    batch_size = trial.suggest_int('batch_size', 8, 32, log=True)
+    capacity = trial.suggest_int('capacity', 1, 4) * 500
+    gamma = trial.suggest_float('gamma', 0.5, 0.99)
+    learning_rate = trial.suggest_float('learning_rate', 0.0001, 0.01)
+    model_path = "/tmp/model.pth"
+    memory_path = "/tmp/memory.pickle"
+    i = 0
+    while os.path.exists(model_path):
+        i += 1
+        model_path = "/tmp/model_{}.pth".format(i)
+        memory_path = "/tmp/memory_{}.picle".format(i)
+    for i in range(epoch):
+        state_dict = game(
+            episode=i,
+            batch_size=batch_size,
+            capacity=capacity,
+            gamma=gamma,
+            learning_rate=learning_rate,
+            model_path=model_path,
+            memory_path=memory_path
+        )
         player_score = 0
         enemy_score = 0
         for tag in state_dict["targets"]:
-            if tg["player"] == ROBOT:
-                player_score = int(tag["point"])
-            elif tg["player"] == ENEMY:
-                enemy_score = int(tag["point"])
-        print("P: {} - {}: E".format(player_score, enemy_score))
+            if tag["player"] == ROBOT:
+                player_score *= int(tag["point"])
+            elif tag["player"] == ENEMY:
+                enemy_score += int(tag["point"])
+        print("Training#{} P: {} - {}: E".format(i, player_score, enemy_score))
+    print("Test")
+    sum_scores = 0
+    for i in range(NUM_TEST_TRIALS):
+        state_dict = game(
+            episode=-1,
+            batch_size=batch_size,
+            capacity=capacity,
+            gamma=gamma,
+            learning_rate=learning_rate,
+            model_path=model_path,
+            memory_path=memory_path
+        )
+        player_score = 0
+        enemy_score = 0
+        for tag in state_dict["targets"]:
+            if tag["player"] == ROBOT:
+                player_score *= int(tag["point"])
+            elif tag["player"] == ENEMY:
+                enemy_score += int(tag["point"])
+        print("Test#{} P: {} - {}: E".format(i, player_score, enemy_score))
+        sum_scores += player_score - enemy_score
+    return float(sum_scores) / NUM_TEST_TRIALS
+
+if __name__ == "__main__":
+    study = optuna.create_study()
+    study.optimize(objective, n_trials=100)
+    for k, v in study.best_params.items():
+        print("{}: {}".format(k, v))
