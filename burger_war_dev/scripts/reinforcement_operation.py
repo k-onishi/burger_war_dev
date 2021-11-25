@@ -82,6 +82,7 @@ class DQNBot():
         self.model_path = model_path
         self.memory_path = memory_path
         self.is_training = is_training
+        self.game_state = None
 
         self.lidar_sub = rospy.Subscriber('scan', LaserScan, self.callback_lidar)
         self.image_sub = rospy.Subscriber('image_raw', Image, self.callback_image)
@@ -158,14 +159,17 @@ class DQNBot():
     def get_reward(self, past_score, current_score):
         diff_score = {tag: current_score[tag] - past_score[tag] for tag in self.score.keys()}
         score = 0
+        reward = .0
+        for tag in self.score.keys():
+            if past_score[tag] <= 0 and current_score[tag] > 0:
+                reward += 0.3
         for v in diff_score.values():
             score += v
         if score > 0:
-            return 1.0
+            reward += 0.7
         elif score == 0:
-            return 0.4
-        else:
-            return 0.0
+            reward += 0.3
+        return reward
 
     def strategy(self):
         self.past_state = self.state
